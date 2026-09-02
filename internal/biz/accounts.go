@@ -124,10 +124,32 @@ func (b *Biz) discover(ctx context.Context, c *cpa.Client, withModels bool) (*sn
 			acct := keyAccountFrom(def, entry)
 			if withModels {
 				models := keyEntryModels(ctx, c, def, entry)
+				// openai-compatibility：额外探测上游 /v1/models，条目清单之外的新模型并入发现结果
+				//（进入待审批）。探测失败仅记录错误，不影响条目清单内的模型。
+				if def.Type == "openai-compatibility" {
+					configured := map[string]bool{}
+					for _, m := range models {
+						configured[m.name] = true
+					}
+					apiKey := compatEntryAPIKey(entry)
+					base, _ := cpa.GetStr(entry, "base-url", "baseUrl", "base_url")
+					if names, err := b.probeUpstream(ctx, def.Type, apiKey, base); err != nil {
+						snap.addErr("探测 %s 上游模型失败: %v", acct.Name, err)
+					} else {
+						for _, n := range names {
+							if !configured[n] {
+								models = append(models, modelEntry{
+									name:    n,
+									payload: jsonMarshalString(map[string]any{"name": n}),
+								})
+							}
+						}
+					}
+				}
 				for _, m := range models {
 					snap.Models = append(snap.Models, store.AccountModel{
 						AccountKey: acct.Key, AccountType: acct.Type, AccountName: acct.Name,
-						Model: m.name, Alias: m.alias, Payload: m.payload,
+						Model: m.name, Alias: m.alias, Payload: m.payload, FromConfig: m.fromConfig,
 					})
 				}
 				acct.ModelCount = len(models)
@@ -164,9 +186,10 @@ func (b *Biz) discover(ctx context.Context, c *cpa.Client, withModels bool) (*sn
 }
 
 type modelEntry struct {
-	name    string
-	alias   string
-	payload string // 原始模型对象 JSON（openai-compatibility），放行时用于完整还原
+	name       string
+	alias      string
+	payload    string // 原始模型对象 JSON（openai-compatibility），放行时用于完整还原
+	fromConfig bool   // 是否来自 CPA 条目显式配置（区别于上游探测发现；显式配置的模型同步时自动放行）
 }
 
 // keyEntryModels 计算单个 Key 型账号的可用模型：
@@ -181,12 +204,12 @@ func keyEntryModels(ctx context.Context, c *cpa.Client, def collectionDef, entry
 		for _, it := range arr {
 			switch m := it.(type) {
 			case string:
-				out = append(out, modelEntry{name: m, payload: jsonMarshalString(map[string]any{"name": m})})
+				out = append(out, modelEntry{name: m, fromConfig: true, payload: jsonMarshalString(map[string]any{"name": m})})
 			case map[string]any:
 				name, _ := cpa.GetStr(m, "name", "id")
 				if name != "" {
 					alias, _ := cpa.GetStr(m, "alias")
-					out = append(out, modelEntry{name: name, alias: alias, payload: jsonMarshalString(m)})
+					out = append(out, modelEntry{name: name, alias: alias, fromConfig: true, payload: jsonMarshalString(m)})
 				}
 			}
 		}
@@ -204,6 +227,21 @@ func keyEntryModels(ctx context.Context, c *cpa.Client, def collectionDef, entry
 		out = append(out, modelEntry{name: n})
 	}
 	return out
+}
+
+// compatEntryAPIKey 提取 openai-compatibility 条目的 API Key（api-key-entries 数组优先，兼容旧的顶层字段）。
+func compatEntryAPIKey(entry map[string]any) string {
+	if arr, ok := entry["api-key-entries"].([]any); ok {
+		for _, it := range arr {
+			if m, ok := it.(map[string]any); ok {
+				if k, _ := cpa.GetStr(m, "api-key", "apiKey", "api_key"); k != "" {
+					return k
+				}
+			}
+		}
+	}
+	k, _ := cpa.GetStr(entry, "api-key", "apiKey", "api_key")
+	return k
 }
 
 func keyAccountFrom(def collectionDef, entry map[string]any) Account {
@@ -418,14 +456,14 @@ func (b *Biz) CreateAccount(ctx context.Context, in AccountInput) (Account, erro
 				})
 			}
 		}
-		b.insertDiscoveryRecords(rows, func(string) string { return StatusApproved })
+		b.insertDiscoveryRecords(rows, func(store.AccountModel) string { return StatusApproved })
 	}
 	return acct, nil
 }
 
 // insertDiscoveryRecords 落库发现记录并写入变更记录（错误仅记录日志，不阻断主流程）。
-// defaultStatus 按账号/模型返回初始状态，nil 表示待审批；返回 approved 表示直接放行。
-func (b *Biz) insertDiscoveryRecords(rows []store.AccountModel, defaultStatus func(string) string) {
+// defaultStatus 按模型记录返回初始状态，nil 表示待审批；返回 approved 表示直接放行。
+func (b *Biz) insertDiscoveryRecords(rows []store.AccountModel, defaultStatus func(store.AccountModel) string) {
 	inserted, err := b.Store.InsertPending(rows, defaultStatus)
 	if err != nil {
 		slog.Warn("写入发现记录失败", "err", err)
@@ -575,7 +613,7 @@ func (b *Biz) updateCompatModels(def collectionDef, accountKey string, entry map
 			})
 		}
 	}
-	b.insertDiscoveryRecords(added, func(string) string { return StatusApproved })
+	b.insertDiscoveryRecords(added, func(store.AccountModel) string { return StatusApproved })
 	var resubmitted []store.ModelRef
 	for _, r := range rows {
 		if r.AccountKey == accountKey && want[r.Model] && r.Status != StatusApproved {
@@ -760,7 +798,7 @@ func (b *Biz) FetchUpstreamModels(ctx context.Context, key string) ([]string, er
 	if entry == nil {
 		return nil, fmt.Errorf("账号不存在")
 	}
-	apiKey, _ := cpa.GetStr(entry, "api-key", "apiKey", "api_key")
+	apiKey := compatEntryAPIKey(entry)
 	base, _ := cpa.GetStr(entry, "base-url", "baseUrl", "base_url")
 	return b.probeUpstream(ctx, typ, apiKey, base)
 }

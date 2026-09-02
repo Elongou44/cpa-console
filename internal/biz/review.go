@@ -87,14 +87,9 @@ func (b *Biz) Sync(ctx context.Context, auto bool) (*SyncResult, error) {
 		}
 	}
 
-	// 3) diff 新模型：openai-compatibility 中 CPA 已显式配置的模型自动放行，其余进入待审批。
+	// 3) diff 新模型：CPA 条目显式配置的模型（openai-compatibility 路由清单）自动放行，
+	// 上游探测发现的新模型与其他账号的新模型进入待审批。
 	// 自动同步已关闭的账号不参与 diff（不产生新的待审批记录）。
-	compatAccounts := map[string]bool{}
-	for _, a := range snap.Accounts {
-		if a.Kind == "key" && a.Type == "openai-compatibility" {
-			compatAccounts[a.Key] = true
-		}
-	}
 	models := snap.Models
 	if len(disabled) > 0 {
 		models = make([]store.AccountModel, 0, len(snap.Models))
@@ -104,8 +99,8 @@ func (b *Biz) Sync(ctx context.Context, auto bool) (*SyncResult, error) {
 			}
 		}
 	}
-	inserted, err := b.Store.InsertPending(models, func(accountKey string) string {
-		if compatAccounts[accountKey] {
+	inserted, err := b.Store.InsertPending(models, func(m store.AccountModel) string {
+		if m.FromConfig {
 			return StatusApproved
 		}
 		return StatusPending

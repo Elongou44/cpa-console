@@ -174,6 +174,9 @@ type AccountModel struct {
 	Alias       string
 	// Payload 保存发现时的原始模型对象 JSON（openai-compatibility 重写 models 时用于完整还原）。
 	Payload string
+	// FromConfig 表示模型来自 CPA 条目显式配置（区别于上游探测发现），
+	// 仅同步流程内存使用，不落库；显式配置的模型发现时自动放行。
+	FromConfig bool
 }
 
 // ReplaceAccountModels 全量重建可用模型快照。
@@ -256,9 +259,9 @@ type InsertedPending struct {
 }
 
 // InsertPending 批量插入发现记录（忽略已存在项），返回实际新增的记录。
-// defaultStatus 按账号返回初始状态（nil 或返回空视为 pending；openai-compatibility 用 approved 表示
-// "CPA 中已显式配置的模型自动放行"）。
-func (s *Store) InsertPending(rows []AccountModel, defaultStatus func(accountKey string) string) ([]InsertedPending, error) {
+// defaultStatus 按模型记录返回初始状态（nil 或返回空视为 pending；返回 approved 表示自动放行，
+// 如 openai-compatibility 条目显式配置的模型）。
+func (s *Store) InsertPending(rows []AccountModel, defaultStatus func(row AccountModel) string) ([]InsertedPending, error) {
 	existing := map[string]bool{}
 	func() {
 		res, err := s.DB.Query(`SELECT account_key, model_name FROM model_status`)
@@ -291,7 +294,7 @@ func (s *Store) InsertPending(rows []AccountModel, defaultStatus func(accountKey
 		}
 		status := "pending"
 		if defaultStatus != nil {
-			if s := defaultStatus(r.AccountKey); s == "approved" {
+			if st := defaultStatus(r); st == "approved" {
 				status = "approved"
 			}
 		}
