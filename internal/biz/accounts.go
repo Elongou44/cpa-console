@@ -1,0 +1,831 @@
+package biz
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"sort"
+	"strings"
+	"time"
+
+	"cpa-console/internal/cpa"
+	"cpa-console/internal/store"
+)
+
+// collectionDef 描述一个 Key 型账号集合（与 CPA 管理端点一一对应）。
+type collectionDef struct {
+	Collection string // 管理端点路径段
+	Type       string // 展示用类型
+	Channel    string // model-definitions 的 channel（空表示不查询）
+}
+
+var keyCollections = []collectionDef{
+	{"gemini-api-key", "gemini", "gemini"},
+	{"claude-api-key", "claude", "claude"},
+	{"codex-api-key", "codex", "codex"},
+	{"openai-compatibility", "openai-compatibility", ""},
+	{"interactions-api-key", "interactions", "interactions"},
+	{"xai-api-key", "xai", "xai"},
+	{"vertex-api-key", "vertex", "vertex"},
+}
+
+func defByType(t string) (collectionDef, bool) {
+	for _, d := range keyCollections {
+		if d.Type == t {
+			return d, true
+		}
+	}
+	return collectionDef{}, false
+}
+
+// Account 归一化后的账号（Key 型或 OAuth 凭据）。
+type Account struct {
+	Key           string `json:"key"`
+	Kind          string `json:"kind"` // key | oauth
+	Type          string `json:"type"`
+	Name          string `json:"name"`
+	APIKeyMasked  string `json:"apiKeyMasked,omitempty"`
+	BaseURL       string `json:"baseUrl,omitempty"`
+	Status        string `json:"status"` // enabled | disabled | error
+	Disabled      bool   `json:"disabled"`
+	Provider      string `json:"provider,omitempty"` // OAuth 凭据所属 provider
+	AuthFile      string `json:"authFile,omitempty"` // OAuth 凭据文件名
+	ModelCount    int    `json:"modelCount"`
+	PendingCount  int    `json:"pendingCount"`
+	ExcludedCount int    `json:"excludedCount"`
+	SuccessCount  int64  `json:"successCount"`
+	FailureCount  int64  `json:"failureCount"`
+}
+
+// AccountInput 创建/编辑账号的输入。
+type AccountInput struct {
+	Type    string   `json:"type"`
+	APIKey  string   `json:"apiKey"`
+	BaseURL string   `json:"baseUrl"`
+	Name    string   `json:"name"`
+	Models  []string `json:"models"`
+}
+
+func shortHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+func maskKey(k string) string {
+	k = strings.TrimSpace(k)
+	if k == "" {
+		return ""
+	}
+	if len(k) <= 8 {
+		return "****"
+	}
+	return k[:4] + "****" + k[len(k)-4:]
+}
+
+func hostOf(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return raw
+}
+
+// ---------- 发现 ----------
+
+// snapshot 一次发现流程的中间结果。
+type snapshot struct {
+	Accounts []Account
+	Models   []store.AccountModel
+	keyItems map[string][]map[string]any
+	Errors   []string
+}
+
+func (s *snapshot) addErr(format string, args ...any) {
+	s.Errors = append(s.Errors, fmt.Sprintf(format, args...))
+}
+
+// discover 拉取全部账号；withModels 时同时发现各账号可用模型。
+func (b *Biz) discover(ctx context.Context, c *cpa.Client, withModels bool) (*snapshot, error) {
+	snap := &snapshot{keyItems: map[string][]map[string]any{}}
+	for _, def := range keyCollections {
+		items, err := c.GetKeyItems(ctx, def.Collection)
+		if err != nil {
+			snap.addErr("读取 %s 失败: %v", def.Type, err)
+			continue
+		}
+		snap.keyItems[def.Collection] = items
+		for _, entry := range items {
+			acct := keyAccountFrom(def, entry)
+			if withModels {
+				models := keyEntryModels(ctx, c, def, entry)
+				for _, m := range models {
+					snap.Models = append(snap.Models, store.AccountModel{
+						AccountKey: acct.Key, AccountType: acct.Type, AccountName: acct.Name,
+						Model: m.name, Alias: m.alias, Payload: m.payload,
+					})
+				}
+				acct.ModelCount = len(models)
+			}
+			snap.Accounts = append(snap.Accounts, acct)
+		}
+	}
+	files, err := c.GetAuthFiles(ctx)
+	if err != nil {
+		snap.addErr("读取 OAuth 凭据失败: %v", err)
+	} else {
+		for _, f := range files {
+			acct := oauthAccountFrom(f)
+			if withModels {
+				names, err := c.GetAuthFileModels(ctx, acct.AuthFile)
+				if err != nil {
+					snap.addErr("读取凭据 %s 模型失败: %v", acct.Name, err)
+				} else {
+					for _, n := range names {
+						snap.Models = append(snap.Models, store.AccountModel{
+							AccountKey: acct.Key, AccountType: acct.Type, AccountName: acct.Name, Model: n,
+						})
+					}
+					acct.ModelCount = len(names)
+				}
+			}
+			snap.Accounts = append(snap.Accounts, acct)
+		}
+	}
+	if len(snap.Accounts) == 0 && len(snap.Errors) > 0 {
+		return nil, fmt.Errorf("%s", strings.Join(snap.Errors, "; "))
+	}
+	return snap, nil
+}
+
+type modelEntry struct {
+	name    string
+	alias   string
+	payload string // 原始模型对象 JSON（openai-compatibility），放行时用于完整还原
+}
+
+// keyEntryModels 计算单个 Key 型账号的可用模型：
+// openai-compatibility 取条目内 models 数组（即 CPA 的路由清单）；其余类型查 model-definitions 静态目录。
+func keyEntryModels(ctx context.Context, c *cpa.Client, def collectionDef, entry map[string]any) []modelEntry {
+	if def.Type == "openai-compatibility" {
+		var out []modelEntry
+		arr, ok := entry["models"].([]any)
+		if !ok {
+			return nil
+		}
+		for _, it := range arr {
+			switch m := it.(type) {
+			case string:
+				out = append(out, modelEntry{name: m, payload: jsonMarshalString(map[string]any{"name": m})})
+			case map[string]any:
+				name, _ := cpa.GetStr(m, "name", "id")
+				if name != "" {
+					alias, _ := cpa.GetStr(m, "alias")
+					out = append(out, modelEntry{name: name, alias: alias, payload: jsonMarshalString(m)})
+				}
+			}
+		}
+		return out
+	}
+	if def.Channel == "" {
+		return nil
+	}
+	names, err := c.GetModelDefinitions(ctx, def.Channel)
+	if err != nil {
+		return nil
+	}
+	out := make([]modelEntry, 0, len(names))
+	for _, n := range names {
+		out = append(out, modelEntry{name: n})
+	}
+	return out
+}
+
+func keyAccountFrom(def collectionDef, entry map[string]any) Account {
+	base, _ := cpa.GetStr(entry, "base-url", "baseUrl", "base_url")
+	name, _ := cpa.GetStr(entry, "name")
+	a := Account{Kind: "key", Type: def.Type, BaseURL: base}
+	switch {
+	case name != "":
+		a.Name = name
+	case base != "":
+		a.Name = hostOf(base)
+	}
+	// 提取 API Key：openai-compatibility 为 api-key-entries 数组，其余为单个 api-key 字段。
+	firstKey := ""
+	if arr, ok := entry["api-key-entries"].([]any); ok && len(arr) > 0 {
+		if m, ok := arr[0].(map[string]any); ok {
+			firstKey, _ = cpa.GetStr(m, "api-key", "apiKey", "api_key")
+		}
+	}
+	if firstKey == "" {
+		firstKey, _ = cpa.GetStr(entry, "api-key", "apiKey", "api_key")
+	}
+	a.APIKeyMasked = maskKey(firstKey)
+	if a.Name == "" {
+		a.Name = a.APIKeyMasked
+	}
+	// 身份标识：openai-compatibility 以 name 为唯一标识（CPA 按 name 定位条目），其余按密钥指纹。
+	if def.Type == "openai-compatibility" {
+		a.Key = def.Type + ":" + shortHash(a.Name)
+	} else {
+		a.Key = def.Type + ":" + shortHash(firstKey+"@"+base)
+	}
+	a.Status = "enabled"
+	if cpa.GetBool(entry, "disabled") {
+		a.Status = "disabled"
+		a.Disabled = true
+	}
+	a.ExcludedCount = len(cpa.StrSlice(entry["excluded-models"]))
+	return a
+}
+
+var knownProviders = map[string]bool{
+	"claude": true, "codex": true, "gemini": true, "qwen": true, "iflow": true,
+	"kimi": true, "xai": true, "antigravity": true, "cursor": true,
+}
+
+func oauthAccountFrom(f map[string]any) Account {
+	name, _ := cpa.GetStr(f, "name", "file", "filename")
+	if name == "" {
+		raw, _ := jsonMarshal(f)
+		name = "auth-" + shortHash(string(raw))
+	}
+	provider, _ := cpa.GetStr(f, "type", "provider", "auth_type", "channel")
+	if provider == "" {
+		base := strings.TrimSuffix(name, ".json")
+		if i := strings.LastIndex(base, "-"); i >= 0 {
+			cand := strings.ToLower(base[i+1:])
+			if knownProviders[cand] {
+				provider = cand
+			}
+		}
+	}
+	if provider == "" {
+		provider = "oauth"
+	}
+	provider = strings.ToLower(provider)
+	disabled := cpa.GetBool(f, "disabled")
+	unavailable := cpa.GetBool(f, "unavailable")
+	status, _ := cpa.GetStr(f, "status")
+	a := Account{Kind: "oauth", Type: "oauth-" + provider, Provider: provider, AuthFile: name, Name: name, Disabled: disabled}
+	a.Key = "auth:" + name
+	switch {
+	case disabled:
+		a.Status = "disabled"
+	case unavailable || strings.EqualFold(status, "error") || strings.Contains(strings.ToLower(status), "expired"):
+		a.Status = "error"
+	default:
+		a.Status = "enabled"
+	}
+	a.SuccessCount = cpa.GetInt64(f, "success_count", "successCount", "success")
+	a.FailureCount = cpa.GetInt64(f, "failure_count", "failureCount", "failure", "fail_count")
+	return a
+}
+
+// ---------- 账号列表 / CRUD ----------
+
+// ListAccounts 返回过滤后的账号列表（不做逐账号模型请求，模型数取本地快照）。
+func (b *Biz) ListAccounts(ctx context.Context, q, status, typ string) ([]Account, error) {
+	c, err := b.Client()
+	if err != nil {
+		return nil, err
+	}
+	snap, err := b.discover(ctx, c, false)
+	if err != nil {
+		return nil, err
+	}
+	modelCounts, _ := b.Store.ModelCountsByAccount()
+	pendingCounts, _ := b.Store.PendingCountsByAccount()
+	blockedCounts, _ := b.Store.BlockedCountsByAccount()
+	var out []Account
+	needle := strings.ToLower(q)
+	statusSet := map[string]bool{}
+	for _, s := range strings.Split(status, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			statusSet[s] = true
+		}
+	}
+	for _, a := range snap.Accounts {
+		a.ModelCount = modelCounts[a.Key]
+		a.PendingCount = pendingCounts[a.Key]
+		if a.Type == "openai-compatibility" {
+			// openai-compatibility 条目无 excluded-models 字段，屏蔽数 = 未放行模型数
+			a.ExcludedCount = blockedCounts[a.Key]
+		}
+		if typ != "" && a.Type != typ {
+			continue
+		}
+		if len(statusSet) > 0 && !statusSet[a.Status] {
+			continue
+		}
+		if needle != "" &&
+			!strings.Contains(strings.ToLower(a.Name), needle) &&
+			!strings.Contains(strings.ToLower(a.Type), needle) &&
+			!strings.Contains(strings.ToLower(a.BaseURL), needle) {
+			continue
+		}
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Type != out[j].Type {
+			return out[i].Type < out[j].Type
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
+func buildEntry(def collectionDef, in AccountInput) map[string]any {
+	e := map[string]any{"api-key": strings.TrimSpace(in.APIKey)}
+	if in.BaseURL != "" {
+		e["base-url"] = strings.TrimSpace(in.BaseURL)
+	}
+	if def.Type == "openai-compatibility" {
+		// CPA 要求该结构使用 api-key-entries 数组；模型清单由审批流控制（初始为空，放行后由同步引擎写入）。
+		e["name"] = strings.TrimSpace(in.Name)
+		e["api-key-entries"] = []any{map[string]any{"api-key": strings.TrimSpace(in.APIKey)}}
+		delete(e, "api-key")
+		e["models"] = []any{}
+	}
+	return e
+}
+
+// CreateAccount 新增 Key 型账号并写入 CPA。
+func (b *Biz) CreateAccount(ctx context.Context, in AccountInput) (Account, error) {
+	def, ok := defByType(in.Type)
+	if !ok {
+		return Account{}, fmt.Errorf("不支持的账号类型: %s", in.Type)
+	}
+	if strings.TrimSpace(in.APIKey) == "" {
+		return Account{}, fmt.Errorf("API Key 不能为空")
+	}
+	if in.Type == "openai-compatibility" && strings.TrimSpace(in.Name) == "" {
+		return Account{}, fmt.Errorf("OpenAI 兼容账号必须填写名称")
+	}
+	if in.Type == "openai-compatibility" && strings.TrimSpace(in.BaseURL) == "" {
+		return Account{}, fmt.Errorf("OpenAI 兼容账号必须填写 Base URL")
+	}
+	if in.Type == "codex" && strings.TrimSpace(in.BaseURL) == "" {
+		return Account{}, fmt.Errorf("Codex 账号必须填写 Base URL")
+	}
+	c, err := b.Client()
+	if err != nil {
+		return Account{}, err
+	}
+	items, err := c.GetKeyItems(ctx, def.Collection)
+	if err != nil {
+		return Account{}, err
+	}
+	newKey := strings.TrimSpace(in.APIKey)
+	for _, it := range items {
+		if k, _ := cpa.GetStr(it, "api-key", "apiKey", "api_key"); k == newKey {
+			return Account{}, fmt.Errorf("该 API Key 已存在")
+		}
+		if def.Type == "openai-compatibility" {
+			if n, _ := cpa.GetStr(it, "name"); n == in.Name {
+				return Account{}, fmt.Errorf("同名账号已存在: %s", in.Name)
+			}
+		}
+	}
+	entry := buildEntry(def, in)
+	items = append(items, entry)
+	if err := c.PutKeyItems(ctx, def.Collection, items); err != nil {
+		return Account{}, err
+	}
+	acct := keyAccountFrom(def, entry)
+	// openai-compatibility：用户在控制台填写的模型进入待审批，放行后才写入 CPA 的 models 清单。
+	if def.Type == "openai-compatibility" && len(in.Models) > 0 {
+		rows := make([]store.AccountModel, 0, len(in.Models))
+		for _, m := range in.Models {
+			if m = strings.TrimSpace(m); m != "" {
+				rows = append(rows, store.AccountModel{
+					AccountKey: acct.Key, AccountType: acct.Type, AccountName: acct.Name,
+					Model: m, Payload: jsonMarshalString(map[string]any{"name": m}),
+				})
+			}
+		}
+		b.insertPendingRecords(rows, nil)
+	}
+	return acct, nil
+}
+
+// insertPendingRecords 落库发现记录并写入变更记录（错误仅记录日志，不阻断主流程）。
+func (b *Biz) insertPendingRecords(rows []store.AccountModel, defaultStatus func(string) string) {
+	inserted, err := b.Store.InsertPending(rows, defaultStatus)
+	if err != nil {
+		slog.Warn("写入发现记录失败", "err", err)
+		return
+	}
+	if len(inserted) == 0 {
+		return
+	}
+	recs := make([]store.ChangeRecord, 0, len(inserted))
+	for _, ins := range inserted {
+		action := "discovered"
+		if ins.Status == StatusApproved {
+			action = "approved"
+		}
+		recs = append(recs, store.ChangeRecord{
+			AccountKey: ins.Row.AccountKey, AccountType: ins.Row.AccountType, AccountName: ins.Row.AccountName,
+			Model: ins.Row.Model, Action: action,
+		})
+	}
+	if err := b.Store.InsertChangeRecords(recs); err != nil {
+		slog.Warn("写入变更记录失败", "err", err)
+	}
+}
+
+// UpdateAccount 按 key 更新账号（空字段保持不变）。
+func (b *Biz) UpdateAccount(ctx context.Context, key string, in AccountInput) (Account, error) {
+	typ, _, err := splitKey(key)
+	if err != nil {
+		return Account{}, err
+	}
+	def, ok := defByType(typ)
+	if !ok {
+		return Account{}, fmt.Errorf("不支持的账号类型: %s", typ)
+	}
+	c, err := b.Client()
+	if err != nil {
+		return Account{}, err
+	}
+	items, err := c.GetKeyItems(ctx, def.Collection)
+	if err != nil {
+		return Account{}, err
+	}
+	idx := -1
+	for i, it := range items {
+		if keyAccountFrom(def, it).Key == key {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return Account{}, fmt.Errorf("账号不存在或标识已变更，请刷新后重试")
+	}
+	entry := items[idx]
+	// openai-compatibility：先做模型清单 diff（使用重命名前的身份）。
+	if def.Type == "openai-compatibility" && in.Models != nil {
+		if err := b.updateCompatModels(def, key, entry, in.Models); err != nil {
+			return Account{}, err
+		}
+	}
+	if strings.TrimSpace(in.APIKey) != "" {
+		newKey := strings.TrimSpace(in.APIKey)
+		if arr, ok := entry["api-key-entries"].([]any); ok && len(arr) > 0 {
+			if m, ok := arr[0].(map[string]any); ok {
+				m["api-key"] = newKey
+				arr[0] = m
+				entry["api-key-entries"] = arr
+			}
+		} else {
+			entry["api-key"] = newKey
+		}
+	}
+	if strings.TrimSpace(in.BaseURL) != "" {
+		entry["base-url"] = strings.TrimSpace(in.BaseURL)
+	}
+	if def.Type == "openai-compatibility" && strings.TrimSpace(in.Name) != "" {
+		entry["name"] = strings.TrimSpace(in.Name)
+	}
+	items[idx] = entry
+	if err := c.PutKeyItems(ctx, def.Collection, items); err != nil {
+		return Account{}, err
+	}
+	acct := keyAccountFrom(def, entry)
+	if acct.Key != key {
+		// API Key 变更导致标识变化：清除旧标识的本地状态。
+		if removed, err := b.Store.DeleteByAccounts([]string{key}); err == nil && len(removed) > 0 {
+			_ = b.recordRemoved(removed)
+		}
+	}
+	return acct, nil
+}
+
+// updateCompatModels 处理 openai-compatibility 模型清单的用户编辑：
+// 移除的模型删除本地状态并记录；新增的模型进入待审批；CPA 条目 models 仅保留"用户列表 ∩ 已放行"。
+func (b *Biz) updateCompatModels(def collectionDef, accountKey string, entry map[string]any, userModels []string) error {
+	want := map[string]bool{}
+	for _, m := range userModels {
+		if m = strings.TrimSpace(m); m != "" {
+			want[m] = true
+		}
+	}
+	rows, err := b.Store.AllStatuses()
+	if err != nil {
+		return err
+	}
+	acctType, acctName := def.Type, ""
+	var dbModels []string
+	dbSet := map[string]bool{}
+	for _, r := range rows {
+		if r.AccountKey == accountKey {
+			dbSet[r.Model] = true
+			dbModels = append(dbModels, r.Model)
+			acctType, acctName = r.AccountType, r.AccountName
+		}
+	}
+	var removed []string
+	for _, m := range dbModels {
+		if !want[m] {
+			removed = append(removed, m)
+		}
+	}
+	if len(removed) > 0 {
+		deleted, err := b.Store.DeleteStatusModels(accountKey, removed)
+		if err != nil {
+			return err
+		}
+		recs := make([]store.ChangeRecord, 0, len(deleted))
+		for _, r := range deleted {
+			recs = append(recs, store.ChangeRecord{
+				AccountKey: r.AccountKey, AccountType: r.AccountType, AccountName: r.AccountName,
+				Model: r.Model, Action: "removed",
+			})
+		}
+		if err := b.Store.InsertChangeRecords(recs); err != nil {
+			slog.Warn("写入变更记录失败", "err", err)
+		}
+	}
+	var added []store.AccountModel
+	for m := range want {
+		if !dbSet[m] {
+			added = append(added, store.AccountModel{
+				AccountKey: accountKey, AccountType: acctType, AccountName: acctName,
+				Model: m, Payload: jsonMarshalString(map[string]any{"name": m}),
+			})
+		}
+	}
+	b.insertPendingRecords(added, nil)
+
+	approved, err := b.Store.ApprovedModels(accountKey)
+	if err != nil {
+		return err
+	}
+	approvedSet := map[string]bool{}
+	for _, r := range approved {
+		if want[r.Model] {
+			approvedSet[r.Model] = true
+		}
+	}
+	if arr, ok := entry["models"].([]any); ok {
+		kept := make([]any, 0, len(arr))
+		for _, it := range arr {
+			name := ""
+			if m, ok := it.(map[string]any); ok {
+				name, _ = cpa.GetStr(m, "name", "id")
+			} else if s, ok := it.(string); ok {
+				name = s
+			}
+			if approvedSet[name] {
+				kept = append(kept, it)
+			}
+		}
+		entry["models"] = kept
+	}
+	return nil
+}
+
+// DeleteAccount 删除 Key 型账号。
+func (b *Biz) DeleteAccount(ctx context.Context, key string) error {
+	typ, _, err := splitKey(key)
+	if err != nil {
+		return err
+	}
+	def, ok := defByType(typ)
+	if !ok {
+		return fmt.Errorf("不支持的账号类型: %s", typ)
+	}
+	c, err := b.Client()
+	if err != nil {
+		return err
+	}
+	items, err := c.GetKeyItems(ctx, def.Collection)
+	if err != nil {
+		return err
+	}
+	kept := items[:0]
+	found := false
+	for _, it := range items {
+		if keyAccountFrom(def, it).Key == key {
+			found = true
+			continue
+		}
+		kept = append(kept, it)
+	}
+	if !found {
+		return fmt.Errorf("账号不存在")
+	}
+	if err := c.PutKeyItems(ctx, def.Collection, kept); err != nil {
+		return err
+	}
+	if removed, err := b.Store.DeleteByAccounts([]string{key}); err == nil {
+		_ = b.recordRemoved(removed)
+	}
+	return nil
+}
+
+// GetAccount 返回单个账号详情及其当前模型名列表（用于编辑表单回填与账号级审批）。
+func (b *Biz) GetAccount(ctx context.Context, key string) (Account, []string, error) {
+	c, err := b.Client()
+	if err != nil {
+		return Account{}, nil, err
+	}
+	if strings.HasPrefix(key, "auth:") {
+		files, err := c.GetAuthFiles(ctx)
+		if err != nil {
+			return Account{}, nil, err
+		}
+		for _, f := range files {
+			a := oauthAccountFrom(f)
+			if a.Key == key {
+				names, err := c.GetAuthFileModels(ctx, a.AuthFile)
+				return a, names, err
+			}
+		}
+		return Account{}, nil, fmt.Errorf("凭据不存在")
+	}
+	typ, _, err := splitKey(key)
+	if err != nil {
+		return Account{}, nil, err
+	}
+	def, ok := defByType(typ)
+	if !ok {
+		return Account{}, nil, fmt.Errorf("不支持的账号类型: %s", typ)
+	}
+	items, err := c.GetKeyItems(ctx, def.Collection)
+	if err != nil {
+		return Account{}, nil, err
+	}
+	for _, entry := range items {
+		if keyAccountFrom(def, entry).Key == key {
+			a := keyAccountFrom(def, entry)
+			var names []string
+			for _, m := range keyEntryModels(ctx, c, def, entry) {
+				names = append(names, m.name)
+			}
+			return a, names, nil
+		}
+	}
+	return Account{}, nil, fmt.Errorf("账号不存在")
+}
+
+// SetAuthFileStatus 启用/禁用 OAuth 凭据。
+func (b *Biz) SetAuthFileStatus(ctx context.Context, name string, disabled bool) error {
+	c, err := b.Client()
+	if err != nil {
+		return err
+	}
+	return c.PatchAuthFileStatus(ctx, name, disabled)
+}
+
+// FetchUpstreamModels 按账号标识直连上游拉取模型列表。
+func (b *Biz) FetchUpstreamModels(ctx context.Context, key string) ([]string, error) {
+	typ, _, err := splitKey(key)
+	if err != nil {
+		return nil, err
+	}
+	def, ok := defByType(typ)
+	if !ok {
+		return nil, fmt.Errorf("不支持的账号类型: %s", typ)
+	}
+	c, err := b.Client()
+	if err != nil {
+		return nil, err
+	}
+	items, err := c.GetKeyItems(ctx, def.Collection)
+	if err != nil {
+		return nil, err
+	}
+	var entry map[string]any
+	for _, it := range items {
+		if keyAccountFrom(def, it).Key == key {
+			entry = it
+			break
+		}
+	}
+	if entry == nil {
+		return nil, fmt.Errorf("账号不存在")
+	}
+	apiKey, _ := cpa.GetStr(entry, "api-key", "apiKey", "api_key")
+	base, _ := cpa.GetStr(entry, "base-url", "baseUrl", "base_url")
+	return b.probeUpstream(ctx, typ, apiKey, base)
+}
+
+// ProbeUpstream 用给定参数直连上游拉取模型列表（用于账号尚未保存时的"获取模型"）。
+func (b *Biz) ProbeUpstream(ctx context.Context, typ, apiKey, base string) ([]string, error) {
+	return b.probeUpstream(ctx, typ, apiKey, base)
+}
+
+func (b *Biz) probeUpstream(ctx context.Context, typ, apiKey, base string) ([]string, error) {
+	pctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	switch typ {
+	case "openai-compatibility":
+		if base == "" {
+			return nil, fmt.Errorf("该账号未配置 Base URL")
+		}
+		data, err := probe(pctx, strings.TrimRight(base, "/")+"/v1/models", map[string]string{"Authorization": "Bearer " + apiKey})
+		if err != nil {
+			return nil, err
+		}
+		var parsed map[string]any
+		if err := unmarshal(data, &parsed); err != nil {
+			return nil, err
+		}
+		return cpa.ExtractModelNames(parsed), nil
+	case "gemini":
+		if base == "" {
+			base = "https://generativelanguage.googleapis.com"
+		}
+		u := strings.TrimRight(base, "/") + "/v1beta/models?pageSize=200&key=" + url.QueryEscape(apiKey)
+		data, err := probe(pctx, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		var parsed map[string]any
+		if err := unmarshal(data, &parsed); err != nil {
+			return nil, err
+		}
+		return normalizeModelNames(cpa.ExtractModelNames(parsed), "models/"), nil
+	case "claude":
+		if base == "" {
+			base = "https://api.anthropic.com"
+		}
+		u := strings.TrimRight(base, "/") + "/v1/models?limit=100"
+		data, err := probe(pctx, u, map[string]string{"x-api-key": apiKey, "anthropic-version": "2023-06-01"})
+		if err != nil {
+			return nil, err
+		}
+		var parsed map[string]any
+		if err := unmarshal(data, &parsed); err != nil {
+			return nil, err
+		}
+		return cpa.ExtractModelNames(parsed), nil
+	case "xai":
+		if base == "" {
+			base = "https://api.x.ai"
+		}
+		data, err := probe(pctx, strings.TrimRight(base, "/")+"/v1/models", map[string]string{"Authorization": "Bearer " + apiKey})
+		if err != nil {
+			return nil, err
+		}
+		var parsed map[string]any
+		if err := unmarshal(data, &parsed); err != nil {
+			return nil, err
+		}
+		return cpa.ExtractModelNames(parsed), nil
+	default:
+		return nil, fmt.Errorf("该账号类型暂不支持自动获取模型，请手动维护模型列表")
+	}
+}
+
+func normalizeModelNames(names []string, prefix string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		out = append(out, strings.TrimPrefix(n, prefix))
+	}
+	return out
+}
+
+func probe(ctx context.Context, u string, headers map[string]string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求上游失败: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("上游返回 %d: %s", resp.StatusCode, truncate(string(data), 200))
+	}
+	return data, nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+func splitKey(key string) (typ, rest string, err error) {
+	i := strings.Index(key, ":")
+	if i <= 0 {
+		return "", "", fmt.Errorf("非法的账号标识: %s", key)
+	}
+	return key[:i], key[i+1:], nil
+}

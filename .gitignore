@@ -1,0 +1,9 @@
+# 数据与构建产物
+data/
+*.db
+*.exe
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+*.log
