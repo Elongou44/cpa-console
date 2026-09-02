@@ -62,7 +62,7 @@ const dict: Record<string, string> = {
 
   'accounts.dialog.addTitle': '添加账号',
   'accounts.dialog.editTitle': '编辑账号',
-  'accounts.dialog.description': '保存后写入 CPA 并热生效，新发现模型将进入待审批',
+  'accounts.dialog.description': '保存后写入 CPA 并热生效；手动添加的模型直接放行，同步新发现的模型进入待审批',
   'accounts.dialog.type': '账号类型',
   'accounts.dialog.name': '账号名称',
   'accounts.dialog.nameHint': 'OpenAI 兼容账号必填，作为唯一标识',
@@ -72,7 +72,7 @@ const dict: Record<string, string> = {
   'accounts.dialog.baseUrlHint': 'Codex 账号必填；其余留空使用官方地址',
   'accounts.dialog.models': '模型列表',
   'accounts.dialog.modelsInput': '输入模型名，回车添加',
-  'accounts.dialog.modelsHint': '保存后新增模型进入待审批，放行后才会被发现',
+  'accounts.dialog.modelsHint': '保存后所选模型直接放行生效，无需审批',
   'accounts.dialog.dup': '{name} 已存在',
   'accounts.dialog.suggestions': '上游可用模型（点击添加 / 移除）',
   'accounts.dialog.fetchModels': '获取模型',

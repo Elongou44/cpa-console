@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -345,11 +346,17 @@ func buildEntry(def collectionDef, in AccountInput) map[string]any {
 		e["base-url"] = strings.TrimSpace(in.BaseURL)
 	}
 	if def.Type == "openai-compatibility" {
-		// CPA 要求该结构使用 api-key-entries 数组；模型清单由审批流控制（初始为空，放行后由同步引擎写入）。
+		// CPA 要求该结构使用 api-key-entries 数组；手动添加的模型直接放行并写入路由清单。
 		e["name"] = strings.TrimSpace(in.Name)
 		e["api-key-entries"] = []any{map[string]any{"api-key": strings.TrimSpace(in.APIKey)}}
 		delete(e, "api-key")
-		e["models"] = []any{}
+		models := make([]any, 0, len(in.Models))
+		for _, m := range in.Models {
+			if m = strings.TrimSpace(m); m != "" {
+				models = append(models, map[string]any{"name": m})
+			}
+		}
+		e["models"] = models
 	}
 	return e
 }
@@ -397,7 +404,7 @@ func (b *Biz) CreateAccount(ctx context.Context, in AccountInput) (Account, erro
 		return Account{}, err
 	}
 	acct := keyAccountFrom(def, entry)
-	// openai-compatibility：用户在控制台填写的模型进入待审批，放行后才写入 CPA 的 models 清单。
+	// 手动添加的模型不需要审批：直接以放行状态落库（CPA 路由清单已在 buildEntry 写入）。
 	if def.Type == "openai-compatibility" && len(in.Models) > 0 {
 		rows := make([]store.AccountModel, 0, len(in.Models))
 		for _, m := range in.Models {
@@ -408,13 +415,14 @@ func (b *Biz) CreateAccount(ctx context.Context, in AccountInput) (Account, erro
 				})
 			}
 		}
-		b.insertPendingRecords(rows, nil)
+		b.insertDiscoveryRecords(rows, func(string) string { return StatusApproved })
 	}
 	return acct, nil
 }
 
-// insertPendingRecords 落库发现记录并写入变更记录（错误仅记录日志，不阻断主流程）。
-func (b *Biz) insertPendingRecords(rows []store.AccountModel, defaultStatus func(string) string) {
+// insertDiscoveryRecords 落库发现记录并写入变更记录（错误仅记录日志，不阻断主流程）。
+// defaultStatus 按账号/模型返回初始状态，nil 表示待审批；返回 approved 表示直接放行。
+func (b *Biz) insertDiscoveryRecords(rows []store.AccountModel, defaultStatus func(string) string) {
 	inserted, err := b.Store.InsertPending(rows, defaultStatus)
 	if err != nil {
 		slog.Warn("写入发现记录失败", "err", err)
@@ -507,7 +515,8 @@ func (b *Biz) UpdateAccount(ctx context.Context, key string, in AccountInput) (A
 }
 
 // updateCompatModels 处理 openai-compatibility 模型清单的用户编辑：
-// 移除的模型删除本地状态并记录；新增的模型进入待审批；CPA 条目 models 仅保留"用户列表 ∩ 已放行"。
+// 移除的模型删除本地状态并记录；手动提交的模型不需要审批，直接放行；
+// CPA 条目 models 收敛为本次提交的放行清单。
 func (b *Biz) updateCompatModels(def collectionDef, accountKey string, entry map[string]any, userModels []string) error {
 	want := map[string]bool{}
 	for _, m := range userModels {
@@ -551,6 +560,8 @@ func (b *Biz) updateCompatModels(def collectionDef, accountKey string, entry map
 			slog.Warn("写入变更记录失败", "err", err)
 		}
 	}
+	// 手动提交的模型不需要审批：新模型直接以放行状态落库，
+	// 之前处于待审批/已拒绝的模型随本次手动提交一并放行。
 	var added []store.AccountModel
 	for m := range want {
 		if !dbSet[m] {
@@ -560,33 +571,51 @@ func (b *Biz) updateCompatModels(def collectionDef, accountKey string, entry map
 			})
 		}
 	}
-	b.insertPendingRecords(added, nil)
+	b.insertDiscoveryRecords(added, func(string) string { return StatusApproved })
+	var resubmitted []store.ModelRef
+	for _, r := range rows {
+		if r.AccountKey == accountKey && want[r.Model] && r.Status != StatusApproved {
+			resubmitted = append(resubmitted, store.ModelRef{AccountKey: accountKey, Model: r.Model})
+		}
+	}
+	if len(resubmitted) > 0 {
+		changed, err := b.Store.SetStatus(resubmitted, StatusApproved)
+		if err != nil {
+			return err
+		}
+		recs := make([]store.ChangeRecord, 0, len(changed))
+		for _, r := range changed {
+			recs = append(recs, store.ChangeRecord{
+				AccountKey: r.AccountKey, AccountType: r.AccountType, AccountName: r.AccountName,
+				Model: r.Model, Action: "approved",
+			})
+		}
+		if err := b.Store.InsertChangeRecords(recs); err != nil {
+			slog.Warn("写入审批记录失败", "err", err)
+		}
+	}
 
+	// CPA 条目 models 收敛为本次提交的放行清单（保留原始 payload 以还原别名等字段）。
 	approved, err := b.Store.ApprovedModels(accountKey)
 	if err != nil {
 		return err
 	}
-	approvedSet := map[string]bool{}
+	models := make([]any, 0, len(approved))
 	for _, r := range approved {
-		if want[r.Model] {
-			approvedSet[r.Model] = true
-		}
-	}
-	if arr, ok := entry["models"].([]any); ok {
-		kept := make([]any, 0, len(arr))
-		for _, it := range arr {
-			name := ""
-			if m, ok := it.(map[string]any); ok {
-				name, _ = cpa.GetStr(m, "name", "id")
-			} else if s, ok := it.(string); ok {
-				name = s
-			}
-			if approvedSet[name] {
-				kept = append(kept, it)
+		if r.Payload != "" {
+			var obj map[string]any
+			if json.Unmarshal([]byte(r.Payload), &obj) == nil && obj != nil {
+				models = append(models, obj)
+				continue
 			}
 		}
-		entry["models"] = kept
+		obj := map[string]any{"name": r.Model}
+		if r.Alias != "" {
+			obj["alias"] = r.Alias
+		}
+		models = append(models, obj)
 	}
+	entry["models"] = models
 	return nil
 }
 
