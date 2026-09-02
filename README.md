@@ -62,6 +62,10 @@ go build -o cpa-console.exe ./cmd/cpa-console
 
 ## 开发
 
+**Windows 一键启动**：双击项目根目录的 `dev.bat`（自动停止旧实例 → 新窗口启动前端热更新 → 本窗口启动 air 热重载后端）。
+
+手动启动：
+
 ```powershell
 # 后端（热重载：修改 .go 文件自动重建并重启，无需手动重启）
 go install github.com/air-verse/air@latest   # 首次安装（确保 %USERPROFILE%\go\bin 在 PATH 中）
