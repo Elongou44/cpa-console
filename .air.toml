@@ -1,0 +1,20 @@
+# Go 后端热重载配置：`air` 启动后修改 .go 文件自动重建并重启（替代手动重启 exe）。
+# 前端开发用 vite dev server 热更新（frontend/ npm run dev），无需监听 dist。
+root = "."
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -o tmp/cpa-console-dev.exe ./cmd/cpa-console"
+entrypoint = ["./tmp/cpa-console-dev.exe"]
+include_ext = ["go"]
+exclude_dir = ["frontend", "data", "tmp"]
+delay = 1000
+stop_on_error = true
+send_interrupt = true
+kill_delay = 2000
+
+[log]
+time = true
+
+[misc]
+clean_on_exit = true

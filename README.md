@@ -63,13 +63,16 @@ go build -o cpa-console.exe ./cmd/cpa-console
 ## 开发
 
 ```powershell
-# 后端
-go run ./cmd/cpa-console            # API :8790
+# 后端（热重载：修改 .go 文件自动重建并重启，无需手动重启）
+go install github.com/air-verse/air@latest   # 首次安装（确保 %USERPROFILE%\go\bin 在 PATH 中）
+air                                          # 需先停掉正在运行的 cpa-console.exe，二者同用 :8790
 
-# 前端（独立 dev server，/api 代理到 8790）
+# 前端（vite dev server 热更新，/api 代理到 8790）
 cd frontend
-npm run dev                         # http://localhost:5173
+npm run dev                                  # http://localhost:5173
 ```
+
+日常开发用 `air` + `npm run dev` 即可全程免重启；发布用 `make build` 重新构建单二进制（前端 dist 会嵌入）。
 
 ## API 概览
 

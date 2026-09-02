@@ -10,3 +10,7 @@ frontend/dist/
 
 # go build 替换旧 exe 的备份
 *.exe~
+
+# air 热重载工作目录
+tmp/
+.air.test.toml

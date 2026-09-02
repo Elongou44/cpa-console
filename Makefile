@@ -1,4 +1,4 @@
-.PHONY: build build-frontend run dev-frontend clean
+.PHONY: build build-frontend run dev dev-frontend clean
 
 build-frontend:
 	cd frontend && npm install && npm run build
@@ -8,6 +8,9 @@ build: build-frontend
 
 run:
 	go run ./cmd/cpa-console
+
+dev:
+	air
 
 dev-frontend:
 	cd frontend && npm run dev
