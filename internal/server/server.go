@@ -33,6 +33,7 @@ func New(b *biz.Biz, dist fs.FS) *gin.Engine {
 		api.PUT("/accounts/:key", h.updateAccount)
 		api.DELETE("/accounts/:key", h.deleteAccount)
 		api.PATCH("/auth-files", h.patchAuthFile)
+		api.PATCH("/accounts/:key/auto-sync", h.setAutoSync)
 		api.POST("/fetch-models", h.fetchModels)
 		api.POST("/sync", h.sync)
 		api.GET("/models", h.listModels)

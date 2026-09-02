@@ -174,7 +174,7 @@ func (h *handler) createAccount(c *gin.Context) {
 		return
 	}
 	res := gin.H{"account": acct}
-	if syncRes, err := h.b.Sync(c.Request.Context()); err == nil {
+	if syncRes, err := h.b.Sync(c.Request.Context(), false); err == nil {
 		res["sync"] = syncRes
 	} else {
 		res["syncError"] = err.Error()
@@ -198,12 +198,32 @@ func (h *handler) updateAccount(c *gin.Context) {
 		return
 	}
 	res := gin.H{"account": acct}
-	if syncRes, err := h.b.Sync(c.Request.Context()); err == nil {
+	if syncRes, err := h.b.Sync(c.Request.Context(), false); err == nil {
 		res["sync"] = syncRes
 	} else {
 		res["syncError"] = err.Error()
 	}
 	ok(c, res)
+}
+
+// setAutoSync 设置账号级自动同步开关（仅影响后台周期同步）。
+func (h *handler) setAutoSync(c *gin.Context) {
+	key, valid := decodeKey(c)
+	if !valid {
+		return
+	}
+	var in struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, err)
+		return
+	}
+	if err := h.b.SetAutoSync(key, in.Enabled); err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, gin.H{"autoSync": in.Enabled})
 }
 
 func (h *handler) deleteAccount(c *gin.Context) {
@@ -264,7 +284,7 @@ func (h *handler) fetchModels(c *gin.Context) {
 // ---------- 同步与审批 ----------
 
 func (h *handler) sync(c *gin.Context) {
-	res, err := h.b.Sync(c.Request.Context())
+	res, err := h.b.Sync(c.Request.Context(), false)
 	if err != nil {
 		fail(c, err)
 		return

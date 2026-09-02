@@ -15,6 +15,7 @@ export interface AccountRowActions {
   onReview: (account: Account) => void
   onDelete: (account: Account) => void
   onToggle: (account: Account) => void
+  onAutoSync: (account: Account) => void
 }
 
 /** 账号表格。 */
@@ -31,6 +32,7 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
             <TableHead>{t('accounts.columns.status')}</TableHead>
             <TableHead className="text-right">{t('accounts.columns.models')}</TableHead>
             <TableHead className="text-right">{t('accounts.columns.excluded')}</TableHead>
+            <TableHead className="text-center">{t('accounts.columns.autoSync')}</TableHead>
             <TableHead className="w-14 pr-4 text-right">{t('accounts.columns.actions')}</TableHead>
           </TableRow>
         </TableHeader>
@@ -89,6 +91,14 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
               </TableCell>
               <TableCell className="pr-4 text-right font-mono text-sm tabular-nums text-muted-foreground">
                 {account.excludedCount > 0 ? account.excludedCount : <span className="text-muted-foreground/50">0</span>}
+              </TableCell>
+              <TableCell className="text-center">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Switch checked={account.autoSync} onCheckedChange={() => actions.onAutoSync(account)} />
+                  </TooltipTrigger>
+                  <TooltipContent>{t('accounts.autoSyncHint')}</TooltipContent>
+                </Tooltip>
               </TableCell>
               <TableCell className="pr-4 text-right">
                 <DropdownMenu>

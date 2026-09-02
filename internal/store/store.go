@@ -80,11 +80,19 @@ CREATE TABLE IF NOT EXISTS change_records (
 	created_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_change_id ON change_records (id DESC);
+CREATE TABLE IF NOT EXISTS account_settings (
+	account_key TEXT PRIMARY KEY,
+	auto_sync   INTEGER NOT NULL DEFAULT 1
+);
 `
 	if _, err := s.DB.Exec(ddl); err != nil {
 		return err
 	}
-	return s.ensureColumn("model_status", "payload", "TEXT NOT NULL DEFAULT ''")
+	if err := s.ensureColumn("model_status", "payload", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// 兼容旧结构：auto_sync 列缺失时补齐（默认开启）。
+	return s.ensureColumn("account_settings", "auto_sync", "INTEGER NOT NULL DEFAULT 1")
 }
 
 // ensureColumn 为旧库补列（幂等）。
@@ -486,6 +494,82 @@ func (s *Store) DeleteByAccounts(accountKeys []string) ([]ModelStatus, error) {
 		}
 	}
 	return removed, tx.Commit()
+}
+
+// ---------- account_settings（账号级配置） ----------
+
+// AutoSyncDisabledAccounts 返回关闭自动同步的账号标识集合（未写入配置的账号默认开启）。
+func (s *Store) AutoSyncDisabledAccounts() (map[string]bool, error) {
+	rows, err := s.DB.Query(`SELECT account_key FROM account_settings WHERE auto_sync = 0`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out[k] = true
+	}
+	return out, rows.Err()
+}
+
+// SetAutoSync 写入账号自动同步开关。
+func (s *Store) SetAutoSync(accountKey string, on bool) error {
+	v := 0
+	if on {
+		v = 1
+	}
+	_, err := s.DB.Exec(
+		`INSERT INTO account_settings(account_key, auto_sync) VALUES(?, ?)
+		ON CONFLICT(account_key) DO UPDATE SET auto_sync = excluded.auto_sync`, accountKey, v)
+	return err
+}
+
+// RenameAccountSetting 账号标识变更时迁移配置（旧标识不存在则不做任何事）。
+func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var on int
+	err = tx.QueryRow(`SELECT auto_approve FROM account_settings WHERE account_key = ?`, oldKey).Scan(&on)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO account_settings(account_key, auto_approve) VALUES(?, ?)
+		ON CONFLICT(account_key) DO UPDATE SET auto_approve = excluded.auto_approve`, newKey, on); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM account_settings WHERE account_key = ?`, oldKey); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// DeleteAccountSettings 删除账号的全部配置行（账号移除时清理）。
+func (s *Store) DeleteAccountSettings(accountKeys []string) error {
+	if len(accountKeys) == 0 {
+		return nil
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, key := range accountKeys {
+		if _, err := tx.Exec(`DELETE FROM account_settings WHERE account_key = ?`, key); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // ---------- change_records ----------

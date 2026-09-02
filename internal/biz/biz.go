@@ -134,7 +134,7 @@ func (b *Biz) RunSyncLoop(ctx context.Context) {
 				continue
 			}
 			sctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			if _, err := b.Sync(sctx); err != nil {
+			if _, err := b.Sync(sctx, true); err != nil {
 				slog.Warn("后台同步失败", "err", err)
 			}
 			cancel()

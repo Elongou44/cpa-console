@@ -2,7 +2,7 @@
 
 本地运行的 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)（CPA）账号管理控制台。复刻 [axonhub](https://github.com/looplj/axonhub) 渠道管理页的交互与视觉，把 CPA 的"账号管理"映射为"渠道管理"：
 
-- **账号总览**：Provider 类型 Tab + 数据表，Key 型账号增删改、OAuth 凭据启停，全部变更写入 CPA 热生效。
+- **账号总览**：Provider 类型 Tab + 数据表，Key 型账号增删改、OAuth 凭据启停，全部变更写入 CPA 热生效；支持账号级「自动同步」开关，关闭后后台同步不再处理该账号（手动同步与审批不受影响）。
 - **模型审批（强管控）**：同步自动发现的新模型进入待审批区；**审批通过才会被发现与路由**，未审批/已拒绝模型自动写入 CPA 的 `excluded-models` / `oauth-excluded-models` 屏蔽清单，并在每次同步时幂等收敛、纠正漂移。控制台手动添加/编辑的模型直接放行，无需审批。
 - **模型库**：按模型聚合展示"提供账号"自动关联映射、别名、首次发现时间与在线状态。
 - **连接设置**：CPA 服务地址 + 管理密钥，一键连通测试、自动同步开关与间隔。
@@ -80,6 +80,7 @@ npm run dev                         # http://localhost:5173
 | GET | `/api/accounts` | 账号列表（`q`/`status`/`type` 过滤） |
 | GET/POST/PUT/DELETE | `/api/accounts[/:key]` | Key 型账号详情/新增/更新/删除 |
 | PATCH | `/api/auth-files` | OAuth 凭据启用/禁用 |
+| PATCH | `/api/accounts/:key/auto-sync` | 账号级自动同步开关，body: `{ "enabled": true }` |
 | POST | `/api/fetch-models` | 直连上游获取模型列表 |
 | POST | `/api/sync` | 立即同步（发现 + 强管控收敛） |
 | GET | `/api/models` | 审批记录（`status`/`q`/`account` 过滤） |

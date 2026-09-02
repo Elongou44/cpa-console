@@ -24,7 +24,9 @@ type SyncResult struct {
 }
 
 // Sync 执行一次完整同步：发现账号与模型 → diff 待审批 → 强管控收敛。
-func (b *Biz) Sync(ctx context.Context) (*SyncResult, error) {
+// auto 表示由后台周期同步触发：关闭自动同步的账号不参与 diff 与收敛
+// （可用性快照仍刷新供展示）；手动触发（立即同步、账号保存后）传 false，处理全部账号。
+func (b *Biz) Sync(ctx context.Context, auto bool) (*SyncResult, error) {
 	b.mu.Lock()
 	if b.syncing {
 		b.mu.Unlock()
@@ -52,6 +54,14 @@ func (b *Biz) Sync(ctx context.Context) (*SyncResult, error) {
 	res.Accounts = len(snap.Accounts)
 	res.Models = len(snap.Models)
 
+	var disabled map[string]bool
+	if auto {
+		disabled, err = b.Store.AutoSyncDisabledAccounts()
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// 1) 重建可用模型快照。
 	if err := b.Store.ReplaceAccountModels(snap.Models); err != nil {
 		return nil, err
@@ -78,13 +88,23 @@ func (b *Biz) Sync(ctx context.Context) (*SyncResult, error) {
 	}
 
 	// 3) diff 新模型：openai-compatibility 中 CPA 已显式配置的模型自动放行，其余进入待审批。
+	// 自动同步已关闭的账号不参与 diff（不产生新的待审批记录）。
 	compatAccounts := map[string]bool{}
 	for _, a := range snap.Accounts {
 		if a.Kind == "key" && a.Type == "openai-compatibility" {
 			compatAccounts[a.Key] = true
 		}
 	}
-	inserted, err := b.Store.InsertPending(snap.Models, func(accountKey string) string {
+	models := snap.Models
+	if len(disabled) > 0 {
+		models = make([]store.AccountModel, 0, len(snap.Models))
+		for _, m := range snap.Models {
+			if !disabled[m.AccountKey] {
+				models = append(models, m)
+			}
+		}
+	}
+	inserted, err := b.Store.InsertPending(models, func(accountKey string) string {
 		if compatAccounts[accountKey] {
 			return StatusApproved
 		}
@@ -116,7 +136,7 @@ func (b *Biz) Sync(ctx context.Context) (*SyncResult, error) {
 	}
 
 	// 4) 强管控收敛：未放行模型写入 CPA 屏蔽清单。
-	enforced, errs := b.enforce(ctx, c, snap, nil)
+	enforced, errs := b.enforce(ctx, c, snap, nil, disabled)
 	res.Enforced = enforced
 	res.Errors = append(res.Errors, errs...)
 
@@ -160,7 +180,8 @@ func (b *Biz) recordRemoved(removed []store.ModelStatus) error {
 // enforce 将未放行模型写入 CPA 屏蔽配置：
 // Key 型改条目 excluded-models（整体 PUT 合并提交）；OAuth 型按 provider 聚合写 oauth-excluded-models。
 // statuses 传入时使用内存数据（避免重复查询），否则从本地库加载。
-func (b *Biz) enforce(ctx context.Context, c *cpa.Client, snap *snapshot, statuses []store.ModelStatus) (int, []string) {
+// skip 中的账号不参与收敛（自动同步已关闭的账号）；手动触发的全量收敛传 nil。
+func (b *Biz) enforce(ctx context.Context, c *cpa.Client, snap *snapshot, statuses []store.ModelStatus, skip map[string]bool) (int, []string) {
 	if statuses == nil {
 		rows, err := b.Store.AllStatuses()
 		if err != nil {
@@ -202,6 +223,9 @@ func (b *Biz) enforce(ctx context.Context, c *cpa.Client, snap *snapshot, status
 			changed := false
 			for i, entry := range items {
 				acct := keyAccountFrom(def, entry)
+				if skip[acct.Key] {
+					continue
+				}
 				updated, err := b.enforceCompatEntry(byAccount, acct, entry)
 				if err != nil {
 					errs = append(errs, fmt.Sprintf("收敛 %s 模型清单失败: %v", acct.Name, err))
@@ -224,6 +248,9 @@ func (b *Biz) enforce(ctx context.Context, c *cpa.Client, snap *snapshot, status
 		changed := false
 		for i, entry := range items {
 			acct := keyAccountFrom(def, entry)
+			if skip[acct.Key] {
+				continue
+			}
 			blocked := blockedOf(acct.Key)
 			cur := cpa.StrSlice(entry["excluded-models"])
 			sort.Strings(cur)
@@ -243,9 +270,10 @@ func (b *Biz) enforce(ctx context.Context, c *cpa.Client, snap *snapshot, status
 	}
 
 	// OAuth 型账号：按 provider 聚合。模型只要有任一账号已放行即不屏蔽（避免跨凭据误伤）。
+	// 自动同步已关闭的凭据不参与聚合与屏蔽。
 	providerModels := map[string]map[string]bool{}
 	for _, a := range snap.Accounts {
-		if a.Kind != "oauth" || a.Provider == "" || a.Provider == "oauth" {
+		if a.Kind != "oauth" || a.Provider == "" || a.Provider == "oauth" || skip[a.Key] {
 			continue
 		}
 		if providerModels[a.Provider] == nil {
@@ -260,7 +288,7 @@ func (b *Biz) enforce(ctx context.Context, c *cpa.Client, snap *snapshot, status
 	for prov, approved := range providerModels {
 		var blocked []string
 		for _, a := range snap.Accounts {
-			if a.Kind != "oauth" || a.Provider != prov {
+			if a.Kind != "oauth" || a.Provider != prov || skip[a.Key] {
 				continue
 			}
 			for m, st := range byAccount[a.Key] {
@@ -429,7 +457,8 @@ func (b *Biz) ApplyReview(ctx context.Context, action string, refs []store.Model
 	if err != nil {
 		return len(changed), err
 	}
-	if _, errs := b.enforce(ctx, c, snap, nil); len(errs) > 0 {
+	// 手动审批动作触发全量收敛，不受账号级自动同步开关影响。
+	if _, errs := b.enforce(ctx, c, snap, nil, nil); len(errs) > 0 {
 		return len(changed), fmt.Errorf("%s", strings.Join(errs, "; "))
 	}
 	return len(changed), nil

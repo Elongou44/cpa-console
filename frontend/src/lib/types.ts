@@ -13,6 +13,7 @@ export interface Account {
   baseUrl?: string
   status: AccountStatus
   disabled: boolean
+  autoSync: boolean
   provider?: string
   authFile?: string
   modelCount: number

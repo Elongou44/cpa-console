@@ -54,6 +54,7 @@ type Account struct {
 	BaseURL       string `json:"baseUrl,omitempty"`
 	Status        string `json:"status"` // enabled | disabled | error
 	Disabled      bool   `json:"disabled"`
+	AutoSync      bool   `json:"autoSync"` // 账号级自动同步开关（关闭后后台同步不处理该账号）
 	Provider      string `json:"provider,omitempty"` // OAuth 凭据所属 provider
 	AuthFile      string `json:"authFile,omitempty"` // OAuth 凭据文件名
 	ModelCount    int    `json:"modelCount"`
@@ -302,6 +303,7 @@ func (b *Biz) ListAccounts(ctx context.Context, q, status, typ string) ([]Accoun
 	modelCounts, _ := b.Store.ModelCountsByAccount()
 	pendingCounts, _ := b.Store.PendingCountsByAccount()
 	blockedCounts, _ := b.Store.BlockedCountsByAccount()
+	autoSyncOff, _ := b.Store.AutoSyncDisabledAccounts()
 	var out []Account
 	needle := strings.ToLower(q)
 	statusSet := map[string]bool{}
@@ -313,6 +315,7 @@ func (b *Biz) ListAccounts(ctx context.Context, q, status, typ string) ([]Accoun
 	for _, a := range snap.Accounts {
 		a.ModelCount = modelCounts[a.Key]
 		a.PendingCount = pendingCounts[a.Key]
+		a.AutoSync = !autoSyncOff[a.Key]
 		if a.Type == "openai-compatibility" {
 			// openai-compatibility 条目无 excluded-models 字段，屏蔽数 = 未放行模型数
 			a.ExcludedCount = blockedCounts[a.Key]
@@ -506,10 +509,11 @@ func (b *Biz) UpdateAccount(ctx context.Context, key string, in AccountInput) (A
 	}
 	acct := keyAccountFrom(def, entry)
 	if acct.Key != key {
-		// API Key 变更导致标识变化：清除旧标识的本地状态。
+		// API Key 变更导致标识变化：清除旧标识的本地状态，迁移账号级配置。
 		if removed, err := b.Store.DeleteByAccounts([]string{key}); err == nil && len(removed) > 0 {
 			_ = b.recordRemoved(removed)
 		}
+		_ = b.Store.RenameAccountSetting(key, acct.Key)
 	}
 	return acct, nil
 }
@@ -655,6 +659,7 @@ func (b *Biz) DeleteAccount(ctx context.Context, key string) error {
 	if removed, err := b.Store.DeleteByAccounts([]string{key}); err == nil {
 		_ = b.recordRemoved(removed)
 	}
+	_ = b.Store.DeleteAccountSettings([]string{key})
 	return nil
 }
 
@@ -710,6 +715,21 @@ func (b *Biz) SetAuthFileStatus(ctx context.Context, name string, disabled bool)
 		return err
 	}
 	return c.PatchAuthFileStatus(ctx, name, disabled)
+}
+
+// SetAutoSync 设置账号级自动同步开关（仅存本地；关闭后后台周期同步不处理该账号，
+// 手动同步与审批动作不受影响）。
+func (b *Biz) SetAutoSync(accountKey string, on bool) error {
+	if !strings.HasPrefix(accountKey, "auth:") {
+		typ, _, err := splitKey(accountKey)
+		if err != nil {
+			return err
+		}
+		if _, ok := defByType(typ); !ok {
+			return fmt.Errorf("不支持的账号类型: %s", typ)
+		}
+	}
+	return b.Store.SetAutoSync(accountKey, on)
 }
 
 // FetchUpstreamModels 按账号标识直连上游拉取模型列表。
