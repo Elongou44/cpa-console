@@ -432,19 +432,43 @@ func (b *Biz) ApplyReview(ctx context.Context, action string, refs []store.Model
 			slog.Warn("写入审批记录失败", "err", err)
 		}
 	}
+	// 本地状态已落库，立即返回；CPA 强管控收敛移到后台异步执行（幂等，失败由周期同步兜底），
+	// 避免每次点击都等待全量发现与 CPA 写入。
+	go b.enforceAfterReview()
+	return len(changed), nil
+}
+
+// enforceAfterReview 审批变更后的后台收敛；与周期/手动同步共用 syncing 互斥，避免并发写 CPA。
+func (b *Biz) enforceAfterReview() {
+	b.mu.Lock()
+	if b.syncing {
+		b.mu.Unlock()
+		return // 已有同步在跑，其收敛会覆盖本次审批结果
+	}
+	b.syncing = true
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		b.syncing = false
+		b.mu.Unlock()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	c, err := b.Client()
 	if err != nil {
-		return len(changed), err
+		slog.Warn("审批后收敛跳过：CPA 未配置", "err", err)
+		return
 	}
 	snap, err := b.discover(ctx, c, false)
 	if err != nil {
-		return len(changed), err
+		slog.Warn("审批后收敛失败：发现失败", "err", err)
+		return
 	}
 	// 手动审批动作触发全量收敛，不受账号级自动同步开关影响。
 	if _, errs := b.enforce(ctx, c, snap, nil, nil); len(errs) > 0 {
-		return len(changed), fmt.Errorf("%s", strings.Join(errs, "; "))
+		slog.Warn("审批后收敛失败", "errs", strings.Join(errs, "; "))
 	}
-	return len(changed), nil
 }
 
 // ---------- 小工具 ----------

@@ -38,8 +38,8 @@ export function AccountReviewDialog({
     if (ids.length === 0) return
     setBusy(tag)
     action(ids)
-    // busy 状态在数据失效刷新后自动恢复。
-    setTimeout(() => setBusy(null), 800)
+    // 审批为乐观更新，busy 仅作短暂防抖。
+    setTimeout(() => setBusy(null), 300)
   }
 
   return (
