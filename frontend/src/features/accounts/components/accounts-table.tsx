@@ -6,6 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { t } from '@/lib/i18n'
+import { cn } from '@/lib/utils'
 import type { Account } from '@/lib/types'
 import { AccountStatusBadge } from '@/components/shared/review'
 import { TypeBadge } from '@/components/shared/type-icon'
