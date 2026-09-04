@@ -61,7 +61,19 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
                 )}
               </TableCell>
               <TableCell>
-                <TypeBadge type={account.type} />
+                <div className="flex items-center gap-1.5">
+                  <TypeBadge type={account.type} />
+                  {!!account.priority && account.priority > 0 && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Badge variant="secondary" className="h-4 px-1.5 font-mono text-[10px] font-normal">
+                          P{account.priority}
+                        </Badge>
+                      </TooltipTrigger>
+                      <TooltipContent>{t('accounts.dialog.priority')}</TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
               </TableCell>
               <TableCell className="max-w-52">
                 {account.baseUrl ? (

@@ -1,35 +1,44 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Check, Loader2, RefreshCw, RotateCcw, Search, X } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { Check, Loader2, RefreshCw, RotateCcw, Search, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { PageBody, PageHeader } from '@/components/layout/page-header'
 import { t } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import type { ModelStatusRow, ReviewStatus } from '@/lib/types'
 import { useSyncNow } from '@/lib/sync'
-import { useChanges, useModels, useReviewAction } from './data/hooks'
+import { useChanges, useCleanupUnavailable, useModels, useReviewAction, type ModelFilters } from './data/hooks'
 import { ModelsTable, rowId, type ModelsTableActions } from './components/models-table'
 import { ChangesTimeline } from './components/changes-timeline'
+
+/** 全量拉取（无服务端过滤条件），筛选全部在客户端完成。 */
+const ALL_FILTERS: ModelFilters = {}
 
 /** 模型审批中心 + 模型库。 */
 export default function ModelsPage() {
   const [inputQ, setInputQ] = useState('')
-  const [q, setQ] = useState('')
-  useEffect(() => {
-    const id = setTimeout(() => setQ(inputQ), 300)
-    return () => clearTimeout(id)
-  }, [inputQ])
 
   const [tab, setTab] = useState('pending')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [account, setAccount] = useState('')
   const [availability, setAvailability] = useState('')
 
-  const query = useModels({ q })
+  const query = useModels(ALL_FILTERS)
   const changesQuery = useChanges(undefined, tab === 'changes')
   const syncMutation = useSyncNow()
   const approveMutation = useReviewAction('approve')
@@ -37,21 +46,25 @@ export default function ModelsPage() {
   const restoreMutation = useReviewAction('restore')
 
   const rows = query.data?.rows ?? []
-  // 筛选：账号 + 在线状态（q 已在服务端过滤），Tab 计数与列表共用同一份筛选结果
-  const filtered = useMemo(
-    () =>
-      rows.filter(
-        (r) =>
-          (!account || r.accountKey === account) &&
-          (availability === '' || (availability === 'yes' ? r.available : !r.available)),
-      ),
-    [rows, account, availability],
-  )
+  // 筛选全部在客户端完成（数据本就是全量拉取，无需再走服务端往返），Tab 计数与列表共用同一份结果
+  const filtered = useMemo(() => {
+    const needle = inputQ.trim().toLowerCase()
+    return rows.filter(
+      (r) =>
+        (!needle ||
+          r.model.toLowerCase().includes(needle) ||
+          r.accountName.toLowerCase().includes(needle)) &&
+        (!account || r.accountKey === account) &&
+        (availability === '' || (availability === 'yes' ? r.available : !r.available)),
+    )
+  }, [rows, inputQ, account, availability])
   const accountOptions = useMemo(() => {
     const map = new Map<string, string>()
     for (const r of rows) map.set(r.accountKey, r.accountName)
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]))
   }, [rows])
+  const unavailableCount = useMemo(() => rows.filter((r) => !r.available).length, [rows])
+  const cleanupMutation = useCleanupUnavailable()
   const pending = useMemo(() => filtered.filter((r) => r.status === 'pending'), [filtered])
   const approved = useMemo(() => filtered.filter((r) => r.status === 'approved'), [filtered])
   const rejected = useMemo(() => filtered.filter((r) => r.status === 'rejected'), [filtered])
@@ -125,6 +138,31 @@ export default function ModelsPage() {
                 <SelectItem value="no">{t('models.available.no')}</SelectItem>
               </SelectContent>
             </Select>
+
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-destructive hover:text-destructive"
+                  disabled={unavailableCount === 0 || cleanupMutation.isPending}
+                >
+                  {cleanupMutation.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                  {t('models.cleanup')}
+                  {unavailableCount > 0 && <span className="font-mono">({unavailableCount})</span>}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>{t('models.cleanupTitle')}</AlertDialogTitle>
+                  <AlertDialogDescription>{t('models.cleanupDesc', { count: unavailableCount })}</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => cleanupMutation.mutate()}>{t('models.cleanupConfirm')}</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
 
             {(inputQ !== '' || account !== '' || availability !== '') && (
               <Button

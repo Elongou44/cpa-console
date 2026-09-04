@@ -14,3 +14,6 @@ frontend/dist/
 # air 热重载工作目录
 tmp/
 .air.test.toml
+
+# ZCode 本地会话配置
+.zcode/

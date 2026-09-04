@@ -9,8 +9,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { t } from '@/lib/i18n'
 import type { Account, AccountInput } from '@/lib/types'
 import { useAccountDetail, useCreateAccount, useFetchUpstreamModels, useUpdateAccount } from '../data/hooks'
-import { ModelTagInput } from './model-tag-input'
+import { ModelSuggestionsPanel, ModelTagInput } from './model-tag-input'
 import { TagInput } from './tag-input'
+import { cn } from '@/lib/utils'
 
 /** 从剪贴板文本中识别 API Key 与 Base URL：支持纯 Key、纯 URL、`key=xxx`/`url=xxx` 标签、同段混合文本。 */
 export function parseClipboardAccount(text: string): { apiKey?: string; baseUrl?: string } {
@@ -83,6 +84,8 @@ export function AccountActionDialog({
   const [baseUrl, setBaseUrl] = useState('')
   const [group, setGroup] = useState('')
   const [tags, setTags] = useState<string[]>([])
+  const [priority, setPriority] = useState('0')
+  const [ua, setUa] = useState('')
   const [models, setModels] = useState<string[]>([])
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [showKey, setShowKey] = useState(false)
@@ -95,6 +98,8 @@ export function AccountActionDialog({
     setBaseUrl(account?.baseUrl ?? '')
     setGroup(account?.group ?? '')
     setTags(account?.tags ?? [])
+    setPriority(String(account?.priority ?? 0))
+    setUa(account?.ua ?? '')
     setModels([])
     setSuggestions([])
     setShowKey(false)
@@ -155,6 +160,8 @@ export function AccountActionDialog({
       models: type === 'openai-compatibility' ? models : undefined,
       group: group.trim(),
       tags,
+      priority: Math.max(0, Math.floor(Number(priority) || 0)),
+      ua: ua.trim() || undefined,
     }
     if (isEdit && account) {
       updateMutation.mutate({ key: account.key, input }, { onSuccess: () => onOpenChange(false) })
@@ -169,8 +176,8 @@ export function AccountActionDialog({
       return
     }
     const input = account
-      ? { key: account.key }
-      : { type, apiKey: apiKey.trim(), baseUrl: baseUrl.trim() }
+      ? { key: account.key, ua: ua.trim() || undefined }
+      : { type, apiKey: apiKey.trim(), baseUrl: baseUrl.trim(), ua: ua.trim() || undefined }
     fetchModelsMutation.mutate(input, {
       onSuccess: (res) => {
         toast.success(t('accounts.dialog.fetched', { count: res.models.length }))
@@ -183,12 +190,13 @@ export function AccountActionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
+      <DialogContent className={cn('max-h-[90vh] overflow-y-auto', isCompat ? 'sm:max-w-5xl' : 'sm:max-w-4xl')}>
         <DialogHeader>
           <DialogTitle>{isEdit ? t('accounts.dialog.editTitle') : t('accounts.dialog.addTitle')}</DialogTitle>
           <DialogDescription>{t('accounts.dialog.description')}</DialogDescription>
         </DialogHeader>
 
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="grid gap-x-6 gap-y-4 md:grid-cols-2">
           <div className="space-y-1.5">
             <Label>{t('accounts.dialog.type')}</Label>
@@ -294,18 +302,48 @@ export function AccountActionDialog({
             <p className="text-xs text-muted-foreground">{t('accounts.dialog.tagsHint')}</p>
           </div>
 
+          <div className="space-y-1.5">
+            <Label>{t('accounts.dialog.priority')}</Label>
+            <Input
+              type="number"
+              min={0}
+              value={priority}
+              onChange={(e) => setPriority(e.target.value)}
+              className="w-32 font-mono"
+            />
+            <p className="text-xs text-muted-foreground">{t('accounts.dialog.priorityHint')}</p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>{t('accounts.dialog.ua')}</Label>
+            <Input
+              value={ua}
+              onChange={(e) => setUa(e.target.value)}
+              placeholder={t('accounts.dialog.uaPlaceholder')}
+              className="font-mono"
+            />
+            <p className="text-xs text-muted-foreground">{t('accounts.dialog.uaHint')}</p>
+          </div>
+
           {isCompat && (
             <div className="space-y-1.5 md:col-span-2">
               <Label>{t('accounts.dialog.models')}</Label>
-              <ModelTagInput
-                value={models}
-                onChange={setModels}
-                suggestions={suggestions}
-                onFetch={fetchModels}
-                fetching={fetchModelsMutation.isPending}
-              />
+              <ModelTagInput value={models} onChange={setModels} />
             </div>
           )}
+        </div>
+
+        {isCompat && (
+          <aside className="self-start lg:sticky lg:top-0">
+            <ModelSuggestionsPanel
+              value={models}
+              onChange={setModels}
+              suggestions={suggestions}
+              onFetch={fetchModels}
+              fetching={fetchModelsMutation.isPending}
+            />
+          </aside>
+        )}
         </div>
 
         <DialogFooter>

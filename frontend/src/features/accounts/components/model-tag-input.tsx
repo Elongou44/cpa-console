@@ -6,17 +6,6 @@ import { Button } from '@/components/ui/button'
 import { t } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 
-export interface ModelTagInputProps {
-  /** 已选模型列表（受控）。 */
-  value: string[]
-  onChange: (next: string[]) => void
-  /** 上游获取的候选模型（点击添加/移除）。 */
-  suggestions?: string[]
-  /** 传入即展示"获取模型"按钮。 */
-  onFetch?: () => void
-  fetching?: boolean
-}
-
 /** 模型家族分组键：取 "/" 或 "-" 前的首段，如 gpt-4o-mini -> gpt、openai/gpt-4o -> openai。 */
 function familyOf(name: string): string {
   const slash = name.indexOf('/')
@@ -26,12 +15,7 @@ function familyOf(name: string): string {
   return name
 }
 
-/** 模型标签选择器：回车添加、点击标签移除、上游候选按家族分组点选。 */
-export function ModelTagInput({ value, onChange, suggestions = [], onFetch, fetching }: ModelTagInputProps) {
-  const [input, setInput] = useState('')
-  const [filter, setFilter] = useState('')
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
-
+function useModelSelection(value: string[], onChange: (next: string[]) => void) {
   const add = (name: string) => {
     const v = name.trim()
     if (!v) return
@@ -43,6 +27,25 @@ export function ModelTagInput({ value, onChange, suggestions = [], onFetch, fetc
   }
 
   const remove = (name: string) => onChange(value.filter((m) => m !== name))
+
+  const setMany = (items: string[], on: boolean) => {
+    if (on) {
+      const merged = [...value]
+      for (const m of items) if (!merged.includes(m)) merged.push(m)
+      onChange(merged)
+    } else {
+      const set = new Set(items)
+      onChange(value.filter((m) => !set.has(m)))
+    }
+  }
+
+  return { add, remove, setMany }
+}
+
+/** 模型标签输入：回车/粘贴添加、点击标签移除（表单内主区域）。 */
+export function ModelTagInput({ value, onChange }: { value: string[]; onChange: (next: string[]) => void }) {
+  const [input, setInput] = useState('')
+  const { add, remove } = useModelSelection(value, onChange)
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -66,6 +69,61 @@ export function ModelTagInput({ value, onChange, suggestions = [], onFetch, fetc
     setInput('')
   }
 
+  return (
+    <div className="space-y-2">
+      <Input
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
+        placeholder={t('accounts.dialog.modelsInput')}
+        className="font-mono"
+      />
+
+      <div className="flex max-h-56 flex-wrap content-start gap-1.5 overflow-y-auto rounded-lg border bg-muted/30 p-2">
+        {value.length === 0 && (
+          <span className="py-1 text-xs text-muted-foreground">{t('accounts.dialog.selectedEmpty')}</span>
+        )}
+        {value.map((m) => (
+          <span
+            key={m}
+            className="inline-flex max-w-full animate-fade-in-up items-center gap-1 rounded-md border bg-card px-2 py-0.5 font-mono text-xs shadow-sm"
+          >
+            <span className="truncate">{m}</span>
+            <button
+              type="button"
+              className="cursor-pointer text-muted-foreground transition-colors hover:text-destructive"
+              onClick={() => remove(m)}
+              title={t('common.delete')}
+            >
+              <X className="size-3" />
+            </button>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** 上游候选模型侧栏面板：获取模型、按家族分组点选、搜索过滤。 */
+export function ModelSuggestionsPanel({
+  value,
+  onChange,
+  suggestions = [],
+  onFetch,
+  fetching,
+}: {
+  value: string[]
+  onChange: (next: string[]) => void
+  /** 上游获取的候选模型（点击添加/移除）。 */
+  suggestions?: string[]
+  onFetch?: () => void
+  fetching?: boolean
+}) {
+  const [filter, setFilter] = useState('')
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
+  const { add, remove, setMany } = useModelSelection(value, onChange)
+
   const keyword = filter.trim().toLowerCase()
   const visibleSuggestions = keyword ? suggestions.filter((s) => s.toLowerCase().includes(keyword)) : suggestions
   const hasPending = suggestions.some((s) => !value.includes(s))
@@ -83,15 +141,12 @@ export function ModelTagInput({ value, onChange, suggestions = [], onFetch, fetc
       .sort((a, b) => b.models.length - a.models.length || a.name.localeCompare(b.name))
   }, [visibleSuggestions])
 
-  const setMany = (items: string[], on: boolean) => {
-    if (on) {
-      const merged = [...value]
-      for (const m of items) if (!merged.includes(m)) merged.push(m)
-      onChange(merged)
-    } else {
-      const set = new Set(items)
-      onChange(value.filter((m) => !set.has(m)))
-    }
+  // 家族默认折叠，避免上游大量模型一次性摊开；提供一键展开/收起。
+  const allOpen = groups.length > 0 && groups.every(({ name }) => openGroups[name] === true)
+  const toggleAllGroups = () => {
+    const next: Record<string, boolean> = {}
+    for (const { name } of groups) next[name] = !allOpen
+    setOpenGroups(next)
   }
 
   const renderChips = (items: string[]) =>
@@ -118,100 +173,73 @@ export function ModelTagInput({ value, onChange, suggestions = [], onFetch, fetc
 
   return (
     <div className="space-y-2">
-      <div className="flex gap-2">
-        <Input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder={t('accounts.dialog.modelsInput')}
-          className="font-mono"
-        />
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-muted-foreground">
+          {t('accounts.dialog.suggestions')}
+          {suggestions.length > 0 && <span> · {suggestions.length}</span>}
+        </span>
         {onFetch && (
-          <Button type="button" variant="outline" size="sm" className="h-8 shrink-0" onClick={onFetch} disabled={fetching}>
-            {fetching ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+          <Button type="button" variant="outline" size="sm" className="h-7 shrink-0" onClick={onFetch} disabled={fetching}>
+            {fetching ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
             {t('accounts.dialog.fetchModels')}
           </Button>
         )}
       </div>
 
-      {value.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 rounded-lg border bg-muted/30 p-2">
-          {value.map((m) => (
-            <span
-              key={m}
-              className="inline-flex max-w-full animate-fade-in-up items-center gap-1 rounded-md border bg-card px-2 py-0.5 font-mono text-xs shadow-sm"
-            >
-              <span className="truncate">{m}</span>
-              <button
-                type="button"
-                className="cursor-pointer text-muted-foreground transition-colors hover:text-destructive"
-                onClick={() => remove(m)}
-                title={t('common.delete')}
-              >
-                <X className="size-3" />
-              </button>
-            </span>
-          ))}
+      {suggestions.length > 8 && (
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder={t('common.search')}
+            className="h-8 pl-8 text-xs"
+          />
         </div>
       )}
 
-      {onFetch && (suggestions.length > 0 || fetching) && (
-        <div className="rounded-lg border p-2">
-          <div className="mb-1.5 flex items-center justify-between gap-2">
-            <span className="text-xs text-muted-foreground">
-              {t('accounts.dialog.suggestions')} · {suggestions.length}
-            </span>
-            {suggestions.length > 8 && (
-              <div className="relative w-40">
-                <Search className="absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                  placeholder={t('common.search')}
-                  className="h-6 pl-6 text-xs"
-                />
-              </div>
+      {suggestions.length > 0 || fetching ? (
+        groups.length > 1 && !keyword ? (
+          <div className="grid max-h-[26rem] gap-1.5 overflow-y-auto pr-1">
+            {groups.map(({ name, models }) => {
+              const open = openGroups[name] ?? false
+              const allSelected = models.every((m) => value.includes(m))
+              return (
+                <div key={name} className="self-start rounded-md border bg-muted/20">
+                  <div className="flex items-center gap-1.5 px-2 py-1">
+                    <button
+                      type="button"
+                      className="flex flex-1 cursor-pointer select-none items-center gap-1.5 text-left"
+                      onClick={() => setOpenGroups((prev) => ({ ...prev, [name]: !(prev[name] ?? false) }))}
+                    >
+                      <ChevronDown className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', !open && '-rotate-90')} />
+                      <span className="truncate text-xs font-medium">{name}</span>
+                      <span className="text-xs tabular-nums text-muted-foreground">{models.length}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="cursor-pointer text-xs text-muted-foreground transition-colors hover:text-foreground"
+                      onClick={() => setMany(models, !allSelected)}
+                    >
+                      {allSelected ? t('accounts.dialog.groupClear') : t('accounts.dialog.groupAll')}
+                    </button>
+                  </div>
+                  {open && <div className="flex flex-wrap gap-1.5 px-2 pb-2">{renderChips(models)}</div>}
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="flex max-h-[26rem] flex-wrap gap-1.5 overflow-y-auto pr-1">
+            {renderChips(visibleSuggestions)}
+            {visibleSuggestions.length === 0 && !fetching && (
+              <span className="py-1 text-xs text-muted-foreground">{t('common.noData')}</span>
             )}
           </div>
-          {groups.length > 1 && !keyword ? (
-            <div className="grid max-h-64 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
-              {groups.map(({ name, models }) => {
-                const open = openGroups[name] ?? models.length <= 8
-                const allSelected = models.every((m) => value.includes(m))
-                return (
-                  <div key={name} className={cn('self-start rounded-md border bg-muted/20', open && 'sm:col-span-2')}>
-                    <div className="flex items-center gap-1.5 px-2 py-1">
-                      <button
-                        type="button"
-                        className="flex flex-1 cursor-pointer select-none items-center gap-1.5 text-left"
-                        onClick={() => setOpenGroups((prev) => ({ ...prev, [name]: !(prev[name] ?? models.length <= 8) }))}
-                      >
-                        <ChevronDown className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', !open && '-rotate-90')} />
-                        <span className="text-xs font-medium">{name}</span>
-                        <span className="text-xs tabular-nums text-muted-foreground">{models.length}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="cursor-pointer text-xs text-muted-foreground transition-colors hover:text-foreground"
-                        onClick={() => setMany(models, !allSelected)}
-                      >
-                        {allSelected ? t('accounts.dialog.groupClear') : t('accounts.dialog.groupAll')}
-                      </button>
-                    </div>
-                    {open && <div className="flex flex-wrap gap-1.5 px-2 pb-2">{renderChips(models)}</div>}
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="flex max-h-64 flex-wrap gap-1.5 overflow-y-auto">
-              {renderChips(visibleSuggestions)}
-              {visibleSuggestions.length === 0 && !fetching && (
-                <span className="py-1 text-xs text-muted-foreground">{t('common.noData')}</span>
-              )}
-            </div>
-          )}
+        )
+      ) : (
+        <div className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+          {t('accounts.dialog.suggestionsEmpty')}
         </div>
       )}
 

@@ -46,6 +46,7 @@ func New(b *biz.Biz, dist fs.FS) *gin.Engine {
 		api.POST("/models/approve", h.approve)
 		api.POST("/models/reject", h.reject)
 		api.POST("/models/restore", h.restore)
+		api.POST("/models/cleanup-unavailable", h.cleanupUnavailable)
 	}
 
 	registerStatic(r, dist)

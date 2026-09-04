@@ -101,7 +101,11 @@ CREATE TABLE IF NOT EXISTS account_settings (
 		return err
 	}
 	// 账号标签：JSON 字符串数组，同样仅本地。
-	return s.ensureColumn("account_settings", "tags", "TEXT NOT NULL DEFAULT ''")
+	if err := s.ensureColumn("account_settings", "tags", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// 账号级 User-Agent：控制台探测上游时使用，覆盖设置页默认 UA（仅存控制台，不写入 CPA）。
+	return s.ensureColumn("account_settings", "ua", "TEXT NOT NULL DEFAULT ''")
 }
 
 // ensureColumn 为旧库补列（幂等）。
@@ -635,6 +639,32 @@ func (s *Store) SetAccountTags(accountKey string, tags []string) error {
 	return err
 }
 
+// AccountUserAgents 返回各账号单独设置的 User-Agent（未设置的账号不在结果中）。
+func (s *Store) AccountUserAgents() (map[string]string, error) {
+	rows, err := s.DB.Query(`SELECT account_key, ua FROM account_settings WHERE ua != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, ua string
+		if err := rows.Scan(&k, &ua); err != nil {
+			return nil, err
+		}
+		out[k] = ua
+	}
+	return out, rows.Err()
+}
+
+// SetAccountUserAgent 写入账号级 User-Agent（空串表示清除，回落到默认 UA）。
+func (s *Store) SetAccountUserAgent(accountKey, ua string) error {
+	_, err := s.DB.Exec(
+		`INSERT INTO account_settings(account_key, auto_sync, ua) VALUES(?, 1, ?)
+		ON CONFLICT(account_key) DO UPDATE SET ua = excluded.ua`, accountKey, ua)
+	return err
+}
+
 // RenameAccountSetting 账号标识变更时迁移配置（旧标识不存在则不做任何事）。
 func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 	tx, err := s.DB.Begin()
@@ -643,8 +673,8 @@ func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 	}
 	defer tx.Rollback()
 	var autoSync int
-	var grp, tags string
-	err = tx.QueryRow(`SELECT auto_sync, grp, tags FROM account_settings WHERE account_key = ?`, oldKey).Scan(&autoSync, &grp, &tags)
+	var grp, tags, ua string
+	err = tx.QueryRow(`SELECT auto_sync, grp, tags, ua FROM account_settings WHERE account_key = ?`, oldKey).Scan(&autoSync, &grp, &tags, &ua)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -652,9 +682,9 @@ func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO account_settings(account_key, auto_sync, grp, tags) VALUES(?, ?, ?, ?)
-		ON CONFLICT(account_key) DO UPDATE SET auto_sync = excluded.auto_sync, grp = excluded.grp, tags = excluded.tags`,
-		newKey, autoSync, grp, tags); err != nil {
+		`INSERT INTO account_settings(account_key, auto_sync, grp, tags, ua) VALUES(?, ?, ?, ?, ?)
+		ON CONFLICT(account_key) DO UPDATE SET auto_sync = excluded.auto_sync, grp = excluded.grp, tags = excluded.tags, ua = excluded.ua`,
+		newKey, autoSync, grp, tags, ua); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM account_settings WHERE account_key = ?`, oldKey); err != nil {

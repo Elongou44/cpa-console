@@ -24,6 +24,9 @@ type collectionDef struct {
 	Channel    string // model-definitions 的 channel（空表示不查询）
 }
 
+// DefaultUpstreamUA 控制台探测上游请求的默认 User-Agent（设置页可改，账号级 UA 优先）。
+const DefaultUpstreamUA = "Codex Desktop/0.150.0-alpha.8 (Windows 10.0.19045; x86_64) unknown (Codex Desktop; 26.831.21537)"
+
 var keyCollections = []collectionDef{
 	{"gemini-api-key", "gemini", "gemini"},
 	{"claude-api-key", "claude", "claude"},
@@ -58,6 +61,8 @@ type Account struct {
 	AuthFile      string `json:"authFile,omitempty"` // OAuth 凭据文件名
 	Group         string `json:"group,omitempty"`    // 本地分组标记，仅存控制台，不写入 CPA
 	Tags          []string `json:"tags,omitempty"`   // 本地标签列表，同样仅存控制台
+	Priority      int    `json:"priority"`           // 路由优先级，写入 CPA 条目的 priority 字段
+	UA            string `json:"ua,omitempty"`       // 账号级 User-Agent，仅存控制台，覆盖默认 UA
 	ModelCount    int    `json:"modelCount"`
 	PendingCount  int    `json:"pendingCount"`
 	ExcludedCount int    `json:"excludedCount"`
@@ -67,13 +72,15 @@ type Account struct {
 
 // AccountInput 创建/编辑账号的输入。
 type AccountInput struct {
-	Type    string   `json:"type"`
-	APIKey  string   `json:"apiKey"`
-	BaseURL string   `json:"baseUrl"`
-	Name    string   `json:"name"`
-	Models  []string `json:"models"`
-	Group   string   `json:"group"` // 本地分组标记，仅存控制台
-	Tags    []string `json:"tags"`  // 本地标签列表，仅存控制台
+	Type     string   `json:"type"`
+	APIKey   string   `json:"apiKey"`
+	BaseURL  string   `json:"baseUrl"`
+	Name     string   `json:"name"`
+	Models   []string `json:"models"`
+	Group    string   `json:"group"`    // 本地分组标记，仅存控制台
+	Tags     []string `json:"tags"`     // 本地标签列表，仅存控制台
+	Priority *int     `json:"priority"` // 路由优先级，写入 CPA 条目；nil 表示不修改
+	UA       string   `json:"ua"`       // 账号级 User-Agent，仅存控制台；空串表示清除
 }
 
 func shortHash(s string) string {
@@ -116,6 +123,7 @@ func (s *snapshot) addErr(format string, args ...any) {
 // discover 拉取全部账号；withModels 时同时发现各账号可用模型。
 func (b *Biz) discover(ctx context.Context, c *cpa.Client, withModels bool, skip map[string]bool) (*snapshot, error) {
 	snap := &snapshot{keyItems: map[string][]map[string]any{}}
+	uas, _ := b.Store.AccountUserAgents()
 	for _, def := range keyCollections {
 		items, err := c.GetKeyItems(ctx, def.Collection)
 		if err != nil {
@@ -137,7 +145,7 @@ func (b *Biz) discover(ctx context.Context, c *cpa.Client, withModels bool, skip
 					}
 					apiKey := compatEntryAPIKey(entry)
 					base, _ := cpa.GetStr(entry, "base-url", "baseUrl", "base_url")
-					if names, err := b.probeUpstream(ctx, def.Type, apiKey, base); err != nil {
+					if names, err := b.probeUpstream(ctx, def.Type, apiKey, base, uas[acct.Key]); err != nil {
 						snap.addErr("探测 %s 上游模型失败: %v", acct.Name, err)
 					} else {
 						for _, n := range names {
@@ -284,6 +292,7 @@ func keyAccountFrom(def collectionDef, entry map[string]any) Account {
 		a.Disabled = true
 	}
 	a.ExcludedCount = len(cpa.StrSlice(entry["excluded-models"]))
+	a.Priority = int(cpa.GetInt64(entry, "priority"))
 	return a
 }
 
@@ -348,6 +357,7 @@ func (b *Biz) ListAccounts(ctx context.Context, q, status, typ string) ([]Accoun
 	autoSyncOff, _ := b.Store.AutoSyncDisabledAccounts()
 	groups, _ := b.Store.AccountGroups()
 	tagsMap, _ := b.Store.AccountTags()
+	uas, _ := b.Store.AccountUserAgents()
 	var out []Account
 	needle := strings.ToLower(q)
 	statusSet := map[string]bool{}
@@ -362,6 +372,7 @@ func (b *Biz) ListAccounts(ctx context.Context, q, status, typ string) ([]Accoun
 		a.AutoSync = !autoSyncOff[a.Key]
 		a.Group = groups[a.Key]
 		a.Tags = tagsMap[a.Key]
+		a.UA = uas[a.Key]
 		if a.Type == "openai-compatibility" {
 			// openai-compatibility 条目无 excluded-models 字段，屏蔽数 = 未放行模型数
 			a.ExcludedCount = blockedCounts[a.Key]
@@ -393,6 +404,9 @@ func buildEntry(def collectionDef, in AccountInput) map[string]any {
 	e := map[string]any{"api-key": strings.TrimSpace(in.APIKey)}
 	if in.BaseURL != "" {
 		e["base-url"] = strings.TrimSpace(in.BaseURL)
+	}
+	if in.Priority != nil && *in.Priority != 0 {
+		e["priority"] = *in.Priority
 	}
 	if def.Type == "openai-compatibility" {
 		// CPA 要求该结构使用 api-key-entries 数组；手动添加的模型直接放行并写入路由清单。
@@ -470,6 +484,7 @@ func (b *Biz) CreateAccount(ctx context.Context, in AccountInput) (Account, erro
 	}
 	_ = b.Store.SetAccountGroup(acct.Key, strings.TrimSpace(in.Group))
 	_ = b.Store.SetAccountTags(acct.Key, normalizeTags(in.Tags))
+	_ = b.Store.SetAccountUserAgent(acct.Key, strings.TrimSpace(in.UA))
 	return acct, nil
 }
 
@@ -553,6 +568,14 @@ func (b *Biz) UpdateAccount(ctx context.Context, key string, in AccountInput) (A
 	if def.Type == "openai-compatibility" && strings.TrimSpace(in.Name) != "" {
 		entry["name"] = strings.TrimSpace(in.Name)
 	}
+	if in.Priority != nil {
+		// 优先级写入 CPA 条目；0 表示显式清除。
+		if *in.Priority == 0 {
+			delete(entry, "priority")
+		} else {
+			entry["priority"] = *in.Priority
+		}
+	}
 	items[idx] = entry
 	if err := c.PutKeyItems(ctx, def.Collection, items); err != nil {
 		return Account{}, err
@@ -567,6 +590,7 @@ func (b *Biz) UpdateAccount(ctx context.Context, key string, in AccountInput) (A
 	}
 	_ = b.Store.SetAccountGroup(acct.Key, strings.TrimSpace(in.Group))
 	_ = b.Store.SetAccountTags(acct.Key, normalizeTags(in.Tags))
+	_ = b.Store.SetAccountUserAgent(acct.Key, strings.TrimSpace(in.UA))
 	return acct, nil
 }
 
@@ -587,16 +611,24 @@ func (b *Biz) updateCompatModels(def collectionDef, accountKey string, entry map
 	acctType, acctName := def.Type, ""
 	var dbModels []string
 	dbSet := map[string]bool{}
+	approvedSet := map[string]bool{}
 	for _, r := range rows {
 		if r.AccountKey == accountKey {
 			dbSet[r.Model] = true
 			dbModels = append(dbModels, r.Model)
+			if r.Status == StatusApproved {
+				approvedSet[r.Model] = true
+			}
 			acctType, acctName = r.AccountType, r.AccountName
 		}
 	}
+	// removed 仅针对“用户主动从清单移除的已放行模型”。
+	// 弹窗回填的清单来自 CPA 条目（只含已放行模型），pending/rejected 行天然不在其中；
+	// 若按差集全删，每次编辑保存都会清空拒绝/待审批记录，保存后的同步又会把它们
+	// 重新发现为待审批（拒绝过的模型反复回到待审批）。未放行行的收敛由 enforce 负责。
 	var removed []string
 	for _, m := range dbModels {
-		if !want[m] {
+		if !want[m] && approvedSet[m] {
 			removed = append(removed, m)
 		}
 	}
@@ -740,6 +772,9 @@ func (b *Biz) GetAccount(ctx context.Context, key string) (Account, []string, er
 	for _, entry := range items {
 		if keyAccountFrom(def, entry).Key == key {
 			a := keyAccountFrom(def, entry)
+			if uas, err := b.Store.AccountUserAgents(); err == nil {
+				a.UA = uas[a.Key]
+			}
 			var names []string
 			for _, m := range keyEntryModels(ctx, c, def, entry) {
 				names = append(names, m.name)
@@ -820,7 +855,8 @@ func normalizeTags(tags []string) []string {
 }
 
 // FetchUpstreamModels 按账号标识直连上游拉取模型列表。
-func (b *Biz) FetchUpstreamModels(ctx context.Context, key string) ([]string, error) {
+// uaOverride 非空时优先使用（编辑弹窗未保存的 UA），否则用账号已保存的 UA。
+func (b *Biz) FetchUpstreamModels(ctx context.Context, key, uaOverride string) ([]string, error) {
 	typ, _, err := splitKey(key)
 	if err != nil {
 		return nil, err
@@ -849,12 +885,17 @@ func (b *Biz) FetchUpstreamModels(ctx context.Context, key string) ([]string, er
 	}
 	apiKey := compatEntryAPIKey(entry)
 	base, _ := cpa.GetStr(entry, "base-url", "baseUrl", "base_url")
-	return b.probeUpstream(ctx, typ, apiKey, base)
+	ua := strings.TrimSpace(uaOverride)
+	if ua == "" {
+		uas, _ := b.Store.AccountUserAgents()
+		ua = uas[key]
+	}
+	return b.probeUpstream(ctx, typ, apiKey, base, ua)
 }
 
 // ProbeUpstream 用给定参数直连上游拉取模型列表（用于账号尚未保存时的"获取模型"）。
-func (b *Biz) ProbeUpstream(ctx context.Context, typ, apiKey, base string) ([]string, error) {
-	return b.probeUpstream(ctx, typ, apiKey, base)
+func (b *Biz) ProbeUpstream(ctx context.Context, typ, apiKey, base, ua string) ([]string, error) {
+	return b.probeUpstream(ctx, typ, apiKey, base, ua)
 }
 
 // trimVersionSuffix 去掉 base 末尾的版本段（如 /v1、/v1beta），避免拼出 /v1/v1/models 这类重复路径。
@@ -868,15 +909,24 @@ func trimVersionSuffix(base string) string {
 	return base
 }
 
-func (b *Biz) probeUpstream(ctx context.Context, typ, apiKey, base string) ([]string, error) {
+func (b *Biz) probeUpstream(ctx context.Context, typ, apiKey, base, ua string) ([]string, error) {
 	pctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	if ua = strings.TrimSpace(ua); ua == "" {
+		// 账号未单独设置 UA：回落到设置页默认 UA（仍未设置则用内置默认值）。
+		if st, err := b.Settings(); err == nil {
+			ua = st["default_ua"]
+		}
+		if ua == "" {
+			ua = DefaultUpstreamUA
+		}
+	}
 	switch typ {
 	case "openai-compatibility":
 		if base == "" {
 			return nil, fmt.Errorf("该账号未配置 Base URL")
 		}
-		data, err := probe(pctx, trimVersionSuffix(base)+"/v1/models", map[string]string{"Authorization": "Bearer " + apiKey})
+		data, err := probe(pctx, trimVersionSuffix(base)+"/v1/models", map[string]string{"Authorization": "Bearer " + apiKey}, ua)
 		if err != nil {
 			return nil, err
 		}
@@ -890,7 +940,7 @@ func (b *Biz) probeUpstream(ctx context.Context, typ, apiKey, base string) ([]st
 			base = "https://generativelanguage.googleapis.com"
 		}
 		u := trimVersionSuffix(base) + "/v1beta/models?pageSize=200&key=" + url.QueryEscape(apiKey)
-		data, err := probe(pctx, u, nil)
+		data, err := probe(pctx, u, nil, ua)
 		if err != nil {
 			return nil, err
 		}
@@ -904,7 +954,7 @@ func (b *Biz) probeUpstream(ctx context.Context, typ, apiKey, base string) ([]st
 			base = "https://api.anthropic.com"
 		}
 		u := trimVersionSuffix(base) + "/v1/models?limit=100"
-		data, err := probe(pctx, u, map[string]string{"x-api-key": apiKey, "anthropic-version": "2023-06-01"})
+		data, err := probe(pctx, u, map[string]string{"x-api-key": apiKey, "anthropic-version": "2023-06-01"}, ua)
 		if err != nil {
 			return nil, err
 		}
@@ -917,7 +967,7 @@ func (b *Biz) probeUpstream(ctx context.Context, typ, apiKey, base string) ([]st
 		if base == "" {
 			base = "https://api.x.ai"
 		}
-		data, err := probe(pctx, trimVersionSuffix(base)+"/v1/models", map[string]string{"Authorization": "Bearer " + apiKey})
+		data, err := probe(pctx, trimVersionSuffix(base)+"/v1/models", map[string]string{"Authorization": "Bearer " + apiKey}, ua)
 		if err != nil {
 			return nil, err
 		}
@@ -939,10 +989,13 @@ func normalizeModelNames(names []string, prefix string) []string {
 	return out
 }
 
-func probe(ctx context.Context, u string, headers map[string]string) ([]byte, error) {
+func probe(ctx context.Context, u string, headers map[string]string, ua string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
+	}
+	if ua != "" {
+		req.Header.Set("User-Agent", ua)
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)

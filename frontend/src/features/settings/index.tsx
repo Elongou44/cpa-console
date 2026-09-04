@@ -31,6 +31,7 @@ export default function SettingsPage() {
   const [showKey, setShowKey] = useState(false)
   const [autoSync, setAutoSync] = useState(true)
   const [intervalSec, setIntervalSec] = useState(60)
+  const [defaultUA, setDefaultUA] = useState('')
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
@@ -38,6 +39,7 @@ export default function SettingsPage() {
       setBaseUrl(settingsQuery.data.baseUrl)
       setAutoSync(settingsQuery.data.autoSync)
       setIntervalSec(settingsQuery.data.intervalSec)
+      setDefaultUA(settingsQuery.data.defaultUA ?? '')
       setLoaded(true)
     }
   }, [settingsQuery.data, loaded])
@@ -49,6 +51,7 @@ export default function SettingsPage() {
         managementKey: managementKey || undefined,
         autoSync,
         intervalSec,
+        defaultUA,
       }),
     onSuccess: () => {
       toast.success(t('settings.saved'))
@@ -143,6 +146,16 @@ export default function SettingsPage() {
                 onChange={(e) => setIntervalSec(Math.max(15, Number(e.target.value) || 15))}
                 className="w-32 font-mono"
               />
+            </div>
+            <div className="grid gap-1.5">
+              <Label>{t('settings.upstream')}</Label>
+              <Input
+                value={defaultUA}
+                onChange={(e) => setDefaultUA(e.target.value)}
+                placeholder={t('settings.defaultUA')}
+                className="font-mono text-xs"
+              />
+              <p className="text-xs text-muted-foreground">{t('settings.defaultUAHint')}</p>
             </div>
           </CardContent>
           <CardFooter>

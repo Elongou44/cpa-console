@@ -406,6 +406,47 @@ func (b *Biz) Changes(limit int, account string) ([]store.ChangeRecord, error) {
 	return b.Store.ListChangeRecords(limit, account)
 }
 
+// CleanupUnavailable 清理「上游已不存在」（不可用）的模型：删除本地审批状态并记录变更，
+// 随后后台收敛 CPA——openai-compatibility 条目路由清单会同步移除这些模型。
+// 由前端人工确认后触发，不做任何自动判定，避免上游波动/探测失败误删。
+func (b *Biz) CleanupUnavailable(ctx context.Context) (int, error) {
+	rows, err := b.Store.AllStatuses()
+	if err != nil {
+		return 0, err
+	}
+	byAccount := map[string][]string{}
+	var removed []store.ModelStatus
+	for _, r := range rows {
+		if r.Available {
+			continue
+		}
+		byAccount[r.AccountKey] = append(byAccount[r.AccountKey], r.Model)
+		removed = append(removed, r)
+	}
+	if len(removed) == 0 {
+		return 0, nil
+	}
+	for key, models := range byAccount {
+		if _, err := b.Store.DeleteStatusModels(key, models); err != nil {
+			return 0, err
+		}
+	}
+	recs := make([]store.ChangeRecord, 0, len(removed))
+	for _, r := range removed {
+		recs = append(recs, store.ChangeRecord{
+			AccountKey: r.AccountKey, AccountType: r.AccountType, AccountName: r.AccountName,
+			Model: r.Model, Action: "removed",
+		})
+	}
+	if err := b.Store.InsertChangeRecords(recs); err != nil {
+		slog.Warn("写入清理记录失败", "err", err)
+	}
+	// 后台收敛 CPA（与审批动作共用 syncing 互斥）：compat 条目移除被清理的模型，
+	// 其余类型不涉及 CPA 条目清单，无需额外处理。
+	go b.enforceAfterReview()
+	return len(removed), nil
+}
+
 // ApplyReview 执行审批动作（approve/reject/restore）并立即收敛屏蔽清单。
 func (b *Biz) ApplyReview(ctx context.Context, action string, refs []store.ModelRef) (int, error) {
 	var status, recAction string

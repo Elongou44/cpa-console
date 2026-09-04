@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"cpa-console/internal/biz"
 	"cpa-console/internal/cpa"
@@ -52,6 +53,7 @@ type settingsPayload struct {
 	KeyMasked     string  `json:"keyMasked"`
 	AutoSync      bool    `json:"autoSync"`
 	IntervalSec   int     `json:"intervalSec"`
+	DefaultUA     string  `json:"defaultUA"`
 	ManagementKey *string `json:"managementKey,omitempty"` // 仅写入用
 }
 
@@ -65,12 +67,17 @@ func (h *handler) settingsOut() (*settingsPayload, error) {
 	if v, err := strconv.Atoi(st["interval_sec"]); err == nil && v >= 15 {
 		interval = v
 	}
+	ua := st["default_ua"]
+	if ua == "" {
+		ua = biz.DefaultUpstreamUA
+	}
 	return &settingsPayload{
 		BaseURL:     st["base_url"],
 		HasKey:      st["management_key"] != "",
 		KeyMasked:   maskKey(st["management_key"]),
 		AutoSync:    auto,
 		IntervalSec: interval,
+		DefaultUA:   ua,
 	}, nil
 }
 
@@ -90,9 +97,10 @@ func (h *handler) putSettings(c *gin.Context) {
 		return
 	}
 	kv := map[string]string{
-		"base_url":    in.BaseURL,
-		"auto_sync":   boolStr(in.AutoSync),
+		"base_url":     in.BaseURL,
+		"auto_sync":    boolStr(in.AutoSync),
 		"interval_sec": strconv.Itoa(maxInt(in.IntervalSec, 15)),
+		"default_ua":   strings.TrimSpace(in.DefaultUA),
 	}
 	if in.ManagementKey != nil { // 指针：未传表示不修改
 		kv["management_key"] = *in.ManagementKey
@@ -314,6 +322,7 @@ func (h *handler) fetchModels(c *gin.Context) {
 		Type    string `json:"type"`
 		APIKey  string `json:"apiKey"`
 		BaseURL string `json:"baseUrl"`
+		UA      string `json:"ua"`
 	}
 	if err := c.ShouldBindJSON(&in); err != nil {
 		fail(c, err)
@@ -324,9 +333,9 @@ func (h *handler) fetchModels(c *gin.Context) {
 		err    error
 	)
 	if in.Key != "" {
-		models, err = h.b.FetchUpstreamModels(c.Request.Context(), in.Key)
+		models, err = h.b.FetchUpstreamModels(c.Request.Context(), in.Key, in.UA)
 	} else {
-		models, err = h.b.ProbeUpstream(c.Request.Context(), in.Type, in.APIKey, in.BaseURL)
+		models, err = h.b.ProbeUpstream(c.Request.Context(), in.Type, in.APIKey, in.BaseURL, in.UA)
 	}
 	if err != nil {
 		fail(c, err)
@@ -381,6 +390,16 @@ func (h *handler) libraryRemove(c *gin.Context) {
 		return
 	}
 	ok(c, gin.H{"mode": mode})
+}
+
+// cleanupUnavailable 清理「上游已不存在」的不可用模型（前端人工确认后调用）。
+func (h *handler) cleanupUnavailable(c *gin.Context) {
+	removed, err := h.b.CleanupUnavailable(c.Request.Context())
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, gin.H{"removed": removed})
 }
 
 func (h *handler) listChanges(c *gin.Context) {

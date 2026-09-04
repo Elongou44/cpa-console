@@ -18,6 +18,8 @@ export interface Account {
   authFile?: string
   group?: string
   tags?: string[]
+  priority?: number
+  ua?: string
   modelCount: number
   pendingCount: number
   excludedCount: number
@@ -38,6 +40,8 @@ export interface AccountInput {
   models?: string[]
   group?: string
   tags?: string[]
+  priority?: number
+  ua?: string
 }
 
 export interface SyncResult {
@@ -103,6 +107,7 @@ export interface Settings {
   keyMasked: string
   autoSync: boolean
   intervalSec: number
+  defaultUA: string
 }
 
 export interface RuntimeStatus {
