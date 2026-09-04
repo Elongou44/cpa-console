@@ -175,12 +175,12 @@ export function ModelTagInput({ value, onChange, suggestions = [], onFetch, fetc
             )}
           </div>
           {groups.length > 1 && !keyword ? (
-            <div className="max-h-64 space-y-1 overflow-y-auto pr-1">
+            <div className="grid max-h-64 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
               {groups.map(({ name, models }) => {
                 const open = openGroups[name] ?? models.length <= 8
                 const allSelected = models.every((m) => value.includes(m))
                 return (
-                  <div key={name} className="rounded-md border bg-muted/20">
+                  <div key={name} className={cn('self-start rounded-md border bg-muted/20', open && 'sm:col-span-2')}>
                     <div className="flex items-center gap-1.5 px-2 py-1">
                       <button
                         type="button"
