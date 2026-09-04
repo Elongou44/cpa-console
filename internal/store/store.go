@@ -92,7 +92,11 @@ CREATE TABLE IF NOT EXISTS account_settings (
 		return err
 	}
 	// 兼容旧结构：auto_sync 列缺失时补齐（默认开启）。
-	return s.ensureColumn("account_settings", "auto_sync", "INTEGER NOT NULL DEFAULT 1")
+	if err := s.ensureColumn("account_settings", "auto_sync", "INTEGER NOT NULL DEFAULT 1"); err != nil {
+		return err
+	}
+	// 账号分组：仅本控制台的本地标记，不写入 CPA。
+	return s.ensureColumn("account_settings", "grp", "TEXT NOT NULL DEFAULT ''")
 }
 
 // ensureColumn 为旧库补列（幂等）。
@@ -531,6 +535,32 @@ func (s *Store) SetAutoSync(accountKey string, on bool) error {
 	return err
 }
 
+// AccountGroups 返回有分组标记的账号（未标记的账号不在结果中）。
+func (s *Store) AccountGroups() (map[string]string, error) {
+	rows, err := s.DB.Query(`SELECT account_key, grp FROM account_settings WHERE grp != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, g string
+		if err := rows.Scan(&k, &g); err != nil {
+			return nil, err
+		}
+		out[k] = g
+	}
+	return out, rows.Err()
+}
+
+// SetAccountGroup 写入账号分组标记（空串表示清除分组）。
+func (s *Store) SetAccountGroup(accountKey, grp string) error {
+	_, err := s.DB.Exec(
+		`INSERT INTO account_settings(account_key, auto_sync, grp) VALUES(?, 1, ?)
+		ON CONFLICT(account_key) DO UPDATE SET grp = excluded.grp`, accountKey, grp)
+	return err
+}
+
 // RenameAccountSetting 账号标识变更时迁移配置（旧标识不存在则不做任何事）。
 func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 	tx, err := s.DB.Begin()
@@ -538,8 +568,9 @@ func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 		return err
 	}
 	defer tx.Rollback()
-	var on int
-	err = tx.QueryRow(`SELECT auto_approve FROM account_settings WHERE account_key = ?`, oldKey).Scan(&on)
+	var autoSync int
+	var grp string
+	err = tx.QueryRow(`SELECT auto_sync, grp FROM account_settings WHERE account_key = ?`, oldKey).Scan(&autoSync, &grp)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -547,8 +578,9 @@ func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO account_settings(account_key, auto_approve) VALUES(?, ?)
-		ON CONFLICT(account_key) DO UPDATE SET auto_approve = excluded.auto_approve`, newKey, on); err != nil {
+		`INSERT INTO account_settings(account_key, auto_sync, grp) VALUES(?, ?, ?)
+		ON CONFLICT(account_key) DO UPDATE SET auto_sync = excluded.auto_sync, grp = excluded.grp`,
+		newKey, autoSync, grp); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM account_settings WHERE account_key = ?`, oldKey); err != nil {

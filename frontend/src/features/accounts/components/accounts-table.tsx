@@ -40,7 +40,14 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
           {accounts.map((account) => (
             <TableRow key={account.key}>
               <TableCell className="max-w-56 pl-5">
-                <div className="truncate font-medium">{account.name}</div>
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate font-medium">{account.name}</span>
+                  {account.group && (
+                    <Badge variant="secondary" className="h-4 shrink-0 px-1.5 text-[10px] font-normal">
+                      {account.group}
+                    </Badge>
+                  )}
+                </div>
                 {account.kind === 'oauth' ? (
                   <div className="truncate font-mono text-[11px] text-muted-foreground">{account.authFile}</div>
                 ) : (

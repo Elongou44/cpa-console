@@ -26,10 +26,13 @@ export function AccountActionDialog({
   open,
   onOpenChange,
   account,
+  groups = [],
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   account: Account | null
+  /** 已有分组名，供输入建议。 */
+  groups?: string[]
 }) {
   const isEdit = !!account
   const createMutation = useCreateAccount()
@@ -41,6 +44,7 @@ export function AccountActionDialog({
   const [name, setName] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
+  const [group, setGroup] = useState('')
   const [models, setModels] = useState<string[]>([])
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [showKey, setShowKey] = useState(false)
@@ -51,6 +55,7 @@ export function AccountActionDialog({
     setName(account?.type === 'openai-compatibility' ? account.name : '')
     setApiKey('')
     setBaseUrl(account?.baseUrl ?? '')
+    setGroup(account?.group ?? '')
     setModels([])
     setSuggestions([])
     setShowKey(false)
@@ -84,6 +89,7 @@ export function AccountActionDialog({
       apiKey: apiKey.trim() || undefined,
       baseUrl: baseUrl.trim() || undefined,
       models: type === 'openai-compatibility' ? models : undefined,
+      group: group.trim(),
     }
     if (isEdit && account) {
       updateMutation.mutate({ key: account.key, input }, { onSuccess: () => onOpenChange(false) })
@@ -189,6 +195,22 @@ export function AccountActionDialog({
               className="font-mono"
             />
             <p className="text-xs text-muted-foreground">{t('accounts.dialog.baseUrlHint')}</p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>{t('accounts.dialog.group')}</Label>
+            <Input
+              value={group}
+              onChange={(e) => setGroup(e.target.value)}
+              placeholder={t('accounts.dialog.groupPlaceholder')}
+              list="account-group-options"
+            />
+            <datalist id="account-group-options">
+              {groups.map((g) => (
+                <option key={g} value={g} />
+              ))}
+            </datalist>
+            <p className="text-xs text-muted-foreground">{t('accounts.dialog.groupHint')}</p>
           </div>
 
           {isCompat && (

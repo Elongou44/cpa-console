@@ -16,6 +16,7 @@ export interface Account {
   autoSync: boolean
   provider?: string
   authFile?: string
+  group?: string
   modelCount: number
   pendingCount: number
   excludedCount: number
@@ -34,6 +35,7 @@ export interface AccountInput {
   baseUrl?: string
   name?: string
   models?: string[]
+  group?: string
 }
 
 export interface SyncResult {

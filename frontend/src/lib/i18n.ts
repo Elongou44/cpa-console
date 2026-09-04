@@ -90,6 +90,12 @@ const dict: Record<string, string> = {
   'accounts.dialog.createSuccess': '账号已添加，发现 {new} 个待审批模型',
   'accounts.dialog.updateSuccess': '账号已更新',
   'accounts.dialog.required': '请填写必填项',
+  'accounts.dialog.group': '分组',
+  'accounts.dialog.groupPlaceholder': '如：主力 / 备用（可留空）',
+  'accounts.dialog.groupHint': '仅本控制台的本地标记，不影响 CPA',
+  'accounts.group': '分组',
+  'accounts.groupAll': '全部分组',
+  'accounts.groupSet': '分组已更新',
 
   'accounts.review.title': '模型审批 · {name}',
   'accounts.review.description': '审批通过后模型才会被发现与路由，未放行模型自动写入 CPA 屏蔽清单',

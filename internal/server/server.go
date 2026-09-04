@@ -35,6 +35,7 @@ func New(b *biz.Biz, dist fs.FS) *gin.Engine {
 		api.DELETE("/accounts/:key", h.deleteAccount)
 		api.PATCH("/auth-files", h.patchAuthFile)
 		api.PATCH("/accounts/:key/auto-sync", h.setAutoSync)
+		api.PATCH("/accounts/:key/group", h.setAccountGroup)
 		api.POST("/fetch-models", h.fetchModels)
 		api.POST("/sync", h.sync)
 		api.GET("/models", h.listModels)

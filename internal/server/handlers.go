@@ -240,6 +240,26 @@ func (h *handler) setAutoSync(c *gin.Context) {
 	ok(c, gin.H{"autoSync": in.Enabled})
 }
 
+// setAccountGroup 设置账号的本地分组标记（仅存控制台，不写入 CPA；空串清除分组）。
+func (h *handler) setAccountGroup(c *gin.Context) {
+	key, valid := decodeKey(c)
+	if !valid {
+		return
+	}
+	var in struct {
+		Group string `json:"group"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, err)
+		return
+	}
+	if err := h.b.SetAccountGroup(key, in.Group); err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, gin.H{"group": in.Group})
+}
+
 func (h *handler) deleteAccount(c *gin.Context) {
 	key, valid := decodeKey(c)
 	if !valid {

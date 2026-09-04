@@ -38,6 +38,7 @@ export default function AccountsPage() {
   }, [inputQ])
   const [status, setStatus] = useState<string[]>([])
   const [type, setType] = useState('')
+  const [group, setGroup] = useState('')
 
   const filters = useMemo(() => ({ q, status, type }), [q, status, type])
   const query = useAccounts(filters)
@@ -61,6 +62,10 @@ export default function AccountsPage() {
   }
 
   const accounts = query.data?.accounts ?? []
+  const shown = useMemo(
+    () => (group ? accounts.filter((a) => a.group === group) : accounts),
+    [accounts, group],
+  )
   const tabs = useMemo<TypeTab[]>(() => {
     const counts = new Map<string, number>()
     for (const a of typesQuery.data?.accounts ?? []) {
@@ -72,7 +77,16 @@ export default function AccountsPage() {
       .slice(0, 9)
   }, [typesQuery.data])
 
-  const filtered = q !== '' || status.length > 0 || type !== ''
+  // 全部已有分组名（不受类型/分组筛选影响），供下拉与输入建议。
+  const groupNames = useMemo(() => {
+    const set = new Set<string>()
+    for (const a of typesQuery.data?.accounts ?? []) {
+      if (a.group) set.add(a.group)
+    }
+    return [...set].sort((a, b) => a.localeCompare(b))
+  }, [typesQuery.data])
+
+  const filtered = q !== '' || status.length > 0 || type !== '' || group !== ''
 
   return (
     <div>
@@ -115,11 +129,15 @@ export default function AccountsPage() {
           onQChange={setInputQ}
           status={status}
           onStatusChange={setStatus}
+          groups={groupNames}
+          group={group}
+          onGroupChange={(v) => setGroup(v === '__all__' ? '' : v)}
           filtered={filtered}
           onReset={() => {
             setInputQ('')
             setStatus([])
             setType('')
+            setGroup('')
           }}
         />
 
@@ -135,7 +153,7 @@ export default function AccountsPage() {
           </div>
         ) : (
           <AccountsTable
-            accounts={accounts}
+            accounts={shown}
             actions={{
               onEdit: (a) => show('edit', a),
               onReview: (a) => show('review', a),
@@ -146,8 +164,10 @@ export default function AccountsPage() {
           />
         )}
 
-        {open === 'add' && <AccountActionDialog open onOpenChange={(v) => (v ? null : close())} account={null} />}
-        {open === 'edit' && current && <AccountActionDialog open onOpenChange={(v) => (v ? null : close())} account={current} />}
+        {open === 'add' && <AccountActionDialog open onOpenChange={(v) => (v ? null : close())} account={null} groups={groupNames} />}
+        {open === 'edit' && current && (
+          <AccountActionDialog open onOpenChange={(v) => (v ? null : close())} account={current} groups={groupNames} />
+        )}
         {open === 'review' && current && <AccountReviewDialog open onOpenChange={(v) => (v ? null : close())} account={current} />}
 
         <AlertDialog open={open === 'delete'} onOpenChange={(v) => (v ? null : close())}>

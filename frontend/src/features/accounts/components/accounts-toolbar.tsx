@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { t } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 
@@ -12,12 +13,15 @@ const STATUS_OPTIONS = [
   { value: 'error', label: t('common.error') },
 ]
 
-/** 表格工具栏：搜索 + 状态多选 + 重置。 */
+/** 表格工具栏：搜索 + 状态多选 + 分组筛选 + 重置。 */
 export function AccountsToolbar({
   q,
   onQChange,
   status,
   onStatusChange,
+  groups = [],
+  group,
+  onGroupChange,
   filtered,
   onReset,
 }: {
@@ -25,6 +29,10 @@ export function AccountsToolbar({
   onQChange: (v: string) => void
   status: string[]
   onStatusChange: (v: string[]) => void
+  /** 全部已有分组名。 */
+  groups?: string[]
+  group: string
+  onGroupChange: (v: string) => void
   filtered: boolean
   onReset: () => void
 }) {
@@ -34,6 +42,22 @@ export function AccountsToolbar({
         <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
         <Input value={q} onChange={(e) => onQChange(e.target.value)} placeholder={t('common.search')} className="h-8 pl-8" />
       </div>
+
+      {groups.length > 0 && (
+        <Select value={group} onValueChange={onGroupChange}>
+          <SelectTrigger className="h-8 w-32">
+            <SelectValue placeholder={t('accounts.group')} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">{t('accounts.groupAll')}</SelectItem>
+            {groups.map((g) => (
+              <SelectItem key={g} value={g}>
+                {g}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
 
       <Popover>
         <PopoverTrigger asChild>
