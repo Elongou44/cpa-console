@@ -2,6 +2,7 @@ import { Outlet, createRootRoute, createRoute, createRouter, redirect } from '@t
 import { AppShell } from '@/components/layout/app-shell'
 import AccountsPage from '@/features/accounts'
 import AliasesPage from '@/features/aliases'
+import LibraryPage from '@/features/library'
 import ModelsPage from '@/features/models'
 import SettingsPage from '@/features/settings'
 
@@ -29,6 +30,12 @@ const modelsRoute = createRoute({
   component: ModelsPage,
 })
 
+const libraryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/library',
+  component: LibraryPage,
+})
+
 const aliasesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/aliases',
@@ -41,7 +48,14 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 })
 
-const routeTree = rootRoute.addChildren([indexRoute, accountsRoute, aliasesRoute, modelsRoute, settingsRoute])
+const routeTree = rootRoute.addChildren([
+  indexRoute,
+  accountsRoute,
+  libraryRoute,
+  aliasesRoute,
+  modelsRoute,
+  settingsRoute,
+])
 
 export const router = createRouter({ routeTree })
 

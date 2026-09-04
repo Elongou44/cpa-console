@@ -1,6 +1,6 @@
 import { Link, Outlet, useLocation } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeftRight, Boxes, RefreshCw, Settings2, Users, Zap } from 'lucide-react'
+import { ArrowLeftRight, Boxes, LibraryBig, RefreshCw, Settings2, Users, Zap } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { t } from '@/lib/i18n'
@@ -11,6 +11,7 @@ import { ThemeToggle } from '@/components/theme'
 const navItems = [
   { to: '/accounts', labelKey: 'nav.accounts', icon: Users },
   { to: '/models', labelKey: 'nav.models', icon: Boxes },
+  { to: '/library', labelKey: 'nav.library', icon: LibraryBig },
   { to: '/aliases', labelKey: 'nav.aliases', icon: ArrowLeftRight },
   { to: '/settings', labelKey: 'nav.settings', icon: Settings2 },
 ]

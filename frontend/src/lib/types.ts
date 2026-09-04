@@ -79,6 +79,14 @@ export interface AccountModelsDetail {
   models: AccountModelAliasRow[]
 }
 
+export interface LibraryRow {
+  model: string
+  alias?: string
+  accountKey: string
+  accountName: string
+  accountType: string
+}
+
 export interface ChangeRecord {
   id: number
   accountKey: string

@@ -13,7 +13,6 @@ import type { ModelStatusRow, ReviewStatus } from '@/lib/types'
 import { useSyncNow } from '@/lib/sync'
 import { useChanges, useModels, useReviewAction } from './data/hooks'
 import { ModelsTable, rowId, type ModelsTableActions } from './components/models-table'
-import { groupLibrary, LibraryTable } from './components/library-table'
 import { ChangesTimeline } from './components/changes-timeline'
 
 /** 模型审批中心 + 模型库。 */
@@ -56,15 +55,6 @@ export default function ModelsPage() {
   const pending = useMemo(() => filtered.filter((r) => r.status === 'pending'), [filtered])
   const approved = useMemo(() => filtered.filter((r) => r.status === 'approved'), [filtered])
   const rejected = useMemo(() => filtered.filter((r) => r.status === 'rejected'), [filtered])
-  const library = useMemo(
-    () =>
-      groupLibrary(filtered).sort((a, b) => {
-        if (a.pending !== b.pending) return b.pending - a.pending
-        if (a.approved !== b.approved) return b.approved - a.approved
-        return a.model.localeCompare(b.model)
-      }),
-    [filtered],
-  )
 
   const actions: ModelsTableActions = {
     onApprove: (ids) => approveMutation.mutate(ids),
@@ -100,7 +90,6 @@ export default function ModelsPage() {
             </TabsTrigger>
             <TabsTrigger value="approved">{t('review.approved')}</TabsTrigger>
             <TabsTrigger value="rejected">{t('review.rejected')}</TabsTrigger>
-            <TabsTrigger value="library">{t('models.library')}</TabsTrigger>
             <TabsTrigger value="changes">{t('review.changes')}</TabsTrigger>
           </TabsList>
         </Tabs>
@@ -176,8 +165,6 @@ export default function ModelsPage() {
                   actions={actions}
                 />
               ))}
-
-            {tab === 'library' && (library.length === 0 ? <EmptyHint /> : <LibraryTable groups={library} />)}
 
             {tab === 'changes' &&
               (changesQuery.data?.records?.length ? (

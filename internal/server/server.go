@@ -41,6 +41,8 @@ func New(b *biz.Biz, dist fs.FS) *gin.Engine {
 		api.POST("/sync", h.sync)
 		api.GET("/models", h.listModels)
 		api.GET("/models/changes", h.listChanges)
+		api.GET("/library", h.library)
+		api.POST("/library/remove", h.libraryRemove)
 		api.POST("/models/approve", h.approve)
 		api.POST("/models/reject", h.reject)
 		api.POST("/models/restore", h.restore)

@@ -12,6 +12,8 @@ const dict: Record<string, string> = {
   'nav.modelsDesc': '发现模型的审批放行',
   'nav.aliases': '别名映射',
   'nav.aliasesDesc': '查看账号已加入模型与 alias',
+  'nav.library': '模型库',
+  'nav.libraryDesc': '已加入 CPA 的模型 · 提供方与快捷移除',
   'nav.settings': '设置',
   'nav.settingsDesc': 'CPA 连接与同步',
 
@@ -147,6 +149,13 @@ const dict: Record<string, string> = {
   'models.available.no': '离线',
   'models.library': '模型库',
   'models.libraryHint': '按模型聚合展示所有提供账号',
+  'library.title': '模型库',
+  'library.description': '当前已加入 CPA 路由的模型：按模型聚合展示提供方，点击账号旁的 × 可快捷移除',
+  'library.providers': '{count} 家提供',
+  'library.removeHint': '从 {account} 移除该模型',
+  'library.removedToast': '已从 {account} 删除 {model}',
+  'library.excludedToast': '已在 {account} 屏蔽 {model}',
+  'library.empty': '还没有已加入 CPA 的模型',
   'models.aliasNone': '—',
 
   'aliases.title': '别名映射',

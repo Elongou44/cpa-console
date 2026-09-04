@@ -355,6 +355,34 @@ func (h *handler) listModels(c *gin.Context) {
 	ok(c, list)
 }
 
+// library 聚合全部账号当前已加入 CPA 的模型（模型库页）。
+func (h *handler) library(c *gin.Context) {
+	rows, err := h.b.Library(c.Request.Context())
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, gin.H{"rows": rows})
+}
+
+// libraryRemove 从指定账号移除一个已加入的模型。
+func (h *handler) libraryRemove(c *gin.Context) {
+	var in struct {
+		AccountKey string `json:"accountKey"`
+		Model      string `json:"model"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || in.AccountKey == "" || in.Model == "" {
+		fail(c, err)
+		return
+	}
+	mode, err := h.b.RemoveAccountModel(c.Request.Context(), in.AccountKey, in.Model)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, gin.H{"mode": mode})
+}
+
 func (h *handler) listChanges(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
 	recs, err := h.b.Changes(limit, c.Query("account"))
