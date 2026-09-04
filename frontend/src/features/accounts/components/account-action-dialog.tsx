@@ -40,6 +40,11 @@ export function parseClipboardAccount(text: string): { apiKey?: string; baseUrl?
   return out
 }
 
+/** OpenAI 兼容账号的 Base URL 规范化：去掉已有 /v1 后统一补上，兼容导入的 URL 带或不带 /v1。 */
+function normalizeOpenAIBaseUrl(url: string): string {
+  return url.replace(/\/+$/, '').replace(/\/v1$/i, '') + '/v1'
+}
+
 const KEY_TYPES = [
   { value: 'openai-compatibility', label: 'OpenAI 兼容' },
   { value: 'gemini', label: 'Gemini API' },
@@ -118,7 +123,10 @@ export function AccountActionDialog({
       return
     }
     if (parsed.apiKey) setApiKey(parsed.apiKey)
-    if (parsed.baseUrl) setBaseUrl(parsed.baseUrl)
+    if (parsed.baseUrl) {
+      // OpenAI 兼容账号统一以 /v1 结尾；其他类型按原样填入
+      setBaseUrl(type === 'openai-compatibility' ? normalizeOpenAIBaseUrl(parsed.baseUrl) : parsed.baseUrl)
+    }
     const detail = [
       parsed.apiKey ? 'API Key' : '',
       parsed.baseUrl ? t('accounts.dialog.baseUrl') : '',
