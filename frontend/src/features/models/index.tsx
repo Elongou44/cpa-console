@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Check, Loader2, RefreshCw, X } from 'lucide-react'
+import { Check, Loader2, RefreshCw, RotateCcw, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageBody, PageHeader } from '@/components/layout/page-header'
 import { t } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -26,6 +27,8 @@ export default function ModelsPage() {
 
   const [tab, setTab] = useState('pending')
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [account, setAccount] = useState('')
+  const [availability, setAvailability] = useState('')
 
   const query = useModels({ q })
   const changesQuery = useChanges(undefined, tab === 'changes')
@@ -35,17 +38,32 @@ export default function ModelsPage() {
   const restoreMutation = useReviewAction('restore')
 
   const rows = query.data?.rows ?? []
-  const pending = useMemo(() => rows.filter((r) => r.status === 'pending'), [rows])
-  const approved = useMemo(() => rows.filter((r) => r.status === 'approved'), [rows])
-  const rejected = useMemo(() => rows.filter((r) => r.status === 'rejected'), [rows])
+  // 筛选：账号 + 在线状态（q 已在服务端过滤），Tab 计数与列表共用同一份筛选结果
+  const filtered = useMemo(
+    () =>
+      rows.filter(
+        (r) =>
+          (!account || r.accountKey === account) &&
+          (availability === '' || (availability === 'yes' ? r.available : !r.available)),
+      ),
+    [rows, account, availability],
+  )
+  const accountOptions = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const r of rows) map.set(r.accountKey, r.accountName)
+    return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]))
+  }, [rows])
+  const pending = useMemo(() => filtered.filter((r) => r.status === 'pending'), [filtered])
+  const approved = useMemo(() => filtered.filter((r) => r.status === 'approved'), [filtered])
+  const rejected = useMemo(() => filtered.filter((r) => r.status === 'rejected'), [filtered])
   const library = useMemo(
     () =>
-      groupLibrary(rows).sort((a, b) => {
+      groupLibrary(filtered).sort((a, b) => {
         if (a.pending !== b.pending) return b.pending - a.pending
         if (a.approved !== b.approved) return b.approved - a.approved
         return a.model.localeCompare(b.model)
       }),
-    [rows],
+    [filtered],
   )
 
   const actions: ModelsTableActions = {
@@ -88,8 +106,52 @@ export default function ModelsPage() {
         </Tabs>
 
         {tab !== 'changes' && (
-          <div className="relative w-full sm:w-72">
-            <Input value={inputQ} onChange={(e) => setInputQ(e.target.value)} placeholder={t('common.search')} className="h-8" />
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative w-full sm:w-64">
+              <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input value={inputQ} onChange={(e) => setInputQ(e.target.value)} placeholder={t('common.search')} className="h-8 pl-8" />
+            </div>
+
+            <Select value={account} onValueChange={(v) => setAccount(v === '__all__' ? '' : v)}>
+              <SelectTrigger className="h-8 w-36">
+                <SelectValue placeholder={t('models.filter.account')} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">{t('models.filter.allAccounts')}</SelectItem>
+                {accountOptions.map(([key, name]) => (
+                  <SelectItem key={key} value={key}>
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select value={availability} onValueChange={(v) => setAvailability(v === '__all__' ? '' : v)}>
+              <SelectTrigger className="h-8 w-32">
+                <SelectValue placeholder={t('models.filter.availability')} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">{t('common.all')}</SelectItem>
+                <SelectItem value="yes">{t('models.available.yes')}</SelectItem>
+                <SelectItem value="no">{t('models.available.no')}</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {(inputQ !== '' || account !== '' || availability !== '') && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8"
+                onClick={() => {
+                  setInputQ('')
+                  setAccount('')
+                  setAvailability('')
+                }}
+              >
+                <RotateCcw className="size-3.5" />
+                {t('common.reset')}
+              </Button>
+            )}
           </div>
         )}
 

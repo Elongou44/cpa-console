@@ -130,6 +130,9 @@ const dict: Record<string, string> = {
   'review.action.removed': '移除',
 
   'models.title': '待审批',
+  'models.filter.account': '账号',
+  'models.filter.allAccounts': '全部账号',
+  'models.filter.availability': '在线状态',
   'models.description': '同步发现模型的审批放行：通过后才会被发现与路由',
   'models.columns.model': '模型',
   'models.columns.alias': '别名',
