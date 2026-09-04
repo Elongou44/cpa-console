@@ -10,6 +10,7 @@ import { t } from '@/lib/i18n'
 import type { Account, AccountInput } from '@/lib/types'
 import { useAccountDetail, useCreateAccount, useFetchUpstreamModels, useUpdateAccount } from '../data/hooks'
 import { ModelTagInput } from './model-tag-input'
+import { TagInput } from './tag-input'
 
 const KEY_TYPES = [
   { value: 'openai-compatibility', label: 'OpenAI 兼容' },
@@ -27,12 +28,15 @@ export function AccountActionDialog({
   onOpenChange,
   account,
   groups = [],
+  tagSuggestions = [],
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   account: Account | null
   /** 已有分组名，供输入建议。 */
   groups?: string[]
+  /** 已有标签名，供输入建议。 */
+  tagSuggestions?: string[]
 }) {
   const isEdit = !!account
   const createMutation = useCreateAccount()
@@ -45,6 +49,7 @@ export function AccountActionDialog({
   const [apiKey, setApiKey] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [group, setGroup] = useState('')
+  const [tags, setTags] = useState<string[]>([])
   const [models, setModels] = useState<string[]>([])
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [showKey, setShowKey] = useState(false)
@@ -56,6 +61,7 @@ export function AccountActionDialog({
     setApiKey('')
     setBaseUrl(account?.baseUrl ?? '')
     setGroup(account?.group ?? '')
+    setTags(account?.tags ?? [])
     setModels([])
     setSuggestions([])
     setShowKey(false)
@@ -90,6 +96,7 @@ export function AccountActionDialog({
       baseUrl: baseUrl.trim() || undefined,
       models: type === 'openai-compatibility' ? models : undefined,
       group: group.trim(),
+      tags,
     }
     if (isEdit && account) {
       updateMutation.mutate({ key: account.key, input }, { onSuccess: () => onOpenChange(false) })
@@ -211,6 +218,12 @@ export function AccountActionDialog({
               ))}
             </datalist>
             <p className="text-xs text-muted-foreground">{t('accounts.dialog.groupHint')}</p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>{t('accounts.dialog.tags')}</Label>
+            <TagInput value={tags} onChange={setTags} suggestions={tagSuggestions} />
+            <p className="text-xs text-muted-foreground">{t('accounts.dialog.tagsHint')}</p>
           </div>
 
           {isCompat && (

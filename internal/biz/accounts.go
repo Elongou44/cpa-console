@@ -57,6 +57,7 @@ type Account struct {
 	Provider      string `json:"provider,omitempty"` // OAuth 凭据所属 provider
 	AuthFile      string `json:"authFile,omitempty"` // OAuth 凭据文件名
 	Group         string `json:"group,omitempty"`    // 本地分组标记，仅存控制台，不写入 CPA
+	Tags          []string `json:"tags,omitempty"`   // 本地标签列表，同样仅存控制台
 	ModelCount    int    `json:"modelCount"`
 	PendingCount  int    `json:"pendingCount"`
 	ExcludedCount int    `json:"excludedCount"`
@@ -72,6 +73,7 @@ type AccountInput struct {
 	Name    string   `json:"name"`
 	Models  []string `json:"models"`
 	Group   string   `json:"group"` // 本地分组标记，仅存控制台
+	Tags    []string `json:"tags"`  // 本地标签列表，仅存控制台
 }
 
 func shortHash(s string) string {
@@ -344,6 +346,7 @@ func (b *Biz) ListAccounts(ctx context.Context, q, status, typ string) ([]Accoun
 	blockedCounts, _ := b.Store.BlockedCountsByAccount()
 	autoSyncOff, _ := b.Store.AutoSyncDisabledAccounts()
 	groups, _ := b.Store.AccountGroups()
+	tagsMap, _ := b.Store.AccountTags()
 	var out []Account
 	needle := strings.ToLower(q)
 	statusSet := map[string]bool{}
@@ -357,6 +360,7 @@ func (b *Biz) ListAccounts(ctx context.Context, q, status, typ string) ([]Accoun
 		a.PendingCount = pendingCounts[a.Key]
 		a.AutoSync = !autoSyncOff[a.Key]
 		a.Group = groups[a.Key]
+		a.Tags = tagsMap[a.Key]
 		if a.Type == "openai-compatibility" {
 			// openai-compatibility 条目无 excluded-models 字段，屏蔽数 = 未放行模型数
 			a.ExcludedCount = blockedCounts[a.Key]
@@ -464,6 +468,7 @@ func (b *Biz) CreateAccount(ctx context.Context, in AccountInput) (Account, erro
 		b.insertDiscoveryRecords(rows, func(store.AccountModel) string { return StatusApproved })
 	}
 	_ = b.Store.SetAccountGroup(acct.Key, strings.TrimSpace(in.Group))
+	_ = b.Store.SetAccountTags(acct.Key, normalizeTags(in.Tags))
 	return acct, nil
 }
 
@@ -560,6 +565,7 @@ func (b *Biz) UpdateAccount(ctx context.Context, key string, in AccountInput) (A
 		_ = b.Store.RenameAccountSetting(key, acct.Key)
 	}
 	_ = b.Store.SetAccountGroup(acct.Key, strings.TrimSpace(in.Group))
+	_ = b.Store.SetAccountTags(acct.Key, normalizeTags(in.Tags))
 	return acct, nil
 }
 
@@ -779,6 +785,37 @@ func (b *Biz) SetAccountGroup(accountKey, group string) error {
 		}
 	}
 	return b.Store.SetAccountGroup(accountKey, strings.TrimSpace(group))
+}
+
+// SetAccountTags 设置账号的本地标签列表（空列表清除；不写入 CPA）。
+func (b *Biz) SetAccountTags(accountKey string, tags []string) error {
+	if !strings.HasPrefix(accountKey, "auth:") {
+		typ, _, err := splitKey(accountKey)
+		if err != nil {
+			return err
+		}
+		if _, ok := defByType(typ); !ok {
+			return fmt.Errorf("不支持的账号类型: %s", typ)
+		}
+	}
+	return b.Store.SetAccountTags(accountKey, normalizeTags(tags))
+}
+
+// normalizeTags 去除空白、去重、丢弃空串。
+func normalizeTags(tags []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if t = strings.TrimSpace(t); t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // FetchUpstreamModels 按账号标识直连上游拉取模型列表。

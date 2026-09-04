@@ -17,6 +17,7 @@ export interface Account {
   provider?: string
   authFile?: string
   group?: string
+  tags?: string[]
   modelCount: number
   pendingCount: number
   excludedCount: number
@@ -36,6 +37,7 @@ export interface AccountInput {
   name?: string
   models?: string[]
   group?: string
+  tags?: string[]
 }
 
 export interface SyncResult {

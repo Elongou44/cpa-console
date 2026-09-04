@@ -47,6 +47,11 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
                       {account.group}
                     </Badge>
                   )}
+                  {account.tags?.map((tag) => (
+                    <Badge key={tag} variant="outline" className="h-4 shrink-0 px-1.5 text-[10px] font-normal text-muted-foreground">
+                      {tag}
+                    </Badge>
+                  ))}
                 </div>
                 {account.kind === 'oauth' ? (
                   <div className="truncate font-mono text-[11px] text-muted-foreground">{account.authFile}</div>

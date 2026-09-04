@@ -260,6 +260,26 @@ func (h *handler) setAccountGroup(c *gin.Context) {
 	ok(c, gin.H{"group": in.Group})
 }
 
+// setAccountTags 设置账号的本地标签列表（仅存控制台，不写入 CPA；空列表清除标签）。
+func (h *handler) setAccountTags(c *gin.Context) {
+	key, valid := decodeKey(c)
+	if !valid {
+		return
+	}
+	var in struct {
+		Tags []string `json:"tags"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, err)
+		return
+	}
+	if err := h.b.SetAccountTags(key, in.Tags); err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, gin.H{"tags": in.Tags})
+}
+
 func (h *handler) deleteAccount(c *gin.Context) {
 	key, valid := decodeKey(c)
 	if !valid {

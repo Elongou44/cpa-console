@@ -39,6 +39,7 @@ export default function AccountsPage() {
   const [status, setStatus] = useState<string[]>([])
   const [type, setType] = useState('')
   const [group, setGroup] = useState('')
+  const [tags, setTags] = useState<string[]>([])
 
   const filters = useMemo(() => ({ q, status, type }), [q, status, type])
   const query = useAccounts(filters)
@@ -63,8 +64,13 @@ export default function AccountsPage() {
 
   const accounts = query.data?.accounts ?? []
   const shown = useMemo(
-    () => (group ? accounts.filter((a) => a.group === group) : accounts),
-    [accounts, group],
+    () =>
+      accounts.filter(
+        (a) =>
+          (!group || a.group === group) &&
+          (tags.length === 0 || tags.some((tg) => a.tags?.includes(tg))),
+      ),
+    [accounts, group, tags],
   )
   const tabs = useMemo<TypeTab[]>(() => {
     const counts = new Map<string, number>()
@@ -86,7 +92,16 @@ export default function AccountsPage() {
     return [...set].sort((a, b) => a.localeCompare(b))
   }, [typesQuery.data])
 
-  const filtered = q !== '' || status.length > 0 || type !== '' || group !== ''
+  // 全部已有标签名，供下拉与输入建议。
+  const tagNames = useMemo(() => {
+    const set = new Set<string>()
+    for (const a of typesQuery.data?.accounts ?? []) {
+      for (const tg of a.tags ?? []) set.add(tg)
+    }
+    return [...set].sort((a, b) => a.localeCompare(b))
+  }, [typesQuery.data])
+
+  const filtered = q !== '' || status.length > 0 || type !== '' || group !== '' || tags.length > 0
 
   return (
     <div>
@@ -132,12 +147,16 @@ export default function AccountsPage() {
           groups={groupNames}
           group={group}
           onGroupChange={(v) => setGroup(v === '__all__' ? '' : v)}
+          tagOptions={tagNames}
+          tags={tags}
+          onTagsChange={setTags}
           filtered={filtered}
           onReset={() => {
             setInputQ('')
             setStatus([])
             setType('')
             setGroup('')
+            setTags([])
           }}
         />
 
@@ -164,9 +183,11 @@ export default function AccountsPage() {
           />
         )}
 
-        {open === 'add' && <AccountActionDialog open onOpenChange={(v) => (v ? null : close())} account={null} groups={groupNames} />}
+        {open === 'add' && (
+          <AccountActionDialog open onOpenChange={(v) => (v ? null : close())} account={null} groups={groupNames} tagSuggestions={tagNames} />
+        )}
         {open === 'edit' && current && (
-          <AccountActionDialog open onOpenChange={(v) => (v ? null : close())} account={current} groups={groupNames} />
+          <AccountActionDialog open onOpenChange={(v) => (v ? null : close())} account={current} groups={groupNames} tagSuggestions={tagNames} />
         )}
         {open === 'review' && current && <AccountReviewDialog open onOpenChange={(v) => (v ? null : close())} account={current} />}
 

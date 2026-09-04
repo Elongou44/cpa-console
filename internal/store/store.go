@@ -3,6 +3,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -96,7 +97,11 @@ CREATE TABLE IF NOT EXISTS account_settings (
 		return err
 	}
 	// 账号分组：仅本控制台的本地标记，不写入 CPA。
-	return s.ensureColumn("account_settings", "grp", "TEXT NOT NULL DEFAULT ''")
+	if err := s.ensureColumn("account_settings", "grp", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// 账号标签：JSON 字符串数组，同样仅本地。
+	return s.ensureColumn("account_settings", "tags", "TEXT NOT NULL DEFAULT ''")
 }
 
 // ensureColumn 为旧库补列（幂等）。
@@ -561,6 +566,46 @@ func (s *Store) SetAccountGroup(accountKey, grp string) error {
 	return err
 }
 
+// AccountTags 返回各账号的标签列表（无标签的账号不在结果中）。
+func (s *Store) AccountTags() (map[string][]string, error) {
+	rows, err := s.DB.Query(`SELECT account_key, tags FROM account_settings WHERE tags != '' AND tags != '[]'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]string{}
+	for rows.Next() {
+		var k, raw string
+		if err := rows.Scan(&k, &raw); err != nil {
+			return nil, err
+		}
+		var tags []string
+		if err := json.Unmarshal([]byte(raw), &tags); err != nil {
+			continue // 单行损坏不阻断，视为无标签
+		}
+		if len(tags) > 0 {
+			out[k] = tags
+		}
+	}
+	return out, rows.Err()
+}
+
+// SetAccountTags 写入账号标签（JSON 数组存储，空列表清除标签）。
+func (s *Store) SetAccountTags(accountKey string, tags []string) error {
+	raw := ""
+	if len(tags) > 0 {
+		b, err := json.Marshal(tags)
+		if err != nil {
+			return err
+		}
+		raw = string(b)
+	}
+	_, err := s.DB.Exec(
+		`INSERT INTO account_settings(account_key, auto_sync, tags) VALUES(?, 1, ?)
+		ON CONFLICT(account_key) DO UPDATE SET tags = excluded.tags`, accountKey, raw)
+	return err
+}
+
 // RenameAccountSetting 账号标识变更时迁移配置（旧标识不存在则不做任何事）。
 func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 	tx, err := s.DB.Begin()
@@ -569,8 +614,8 @@ func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 	}
 	defer tx.Rollback()
 	var autoSync int
-	var grp string
-	err = tx.QueryRow(`SELECT auto_sync, grp FROM account_settings WHERE account_key = ?`, oldKey).Scan(&autoSync, &grp)
+	var grp, tags string
+	err = tx.QueryRow(`SELECT auto_sync, grp, tags FROM account_settings WHERE account_key = ?`, oldKey).Scan(&autoSync, &grp, &tags)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -578,9 +623,9 @@ func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO account_settings(account_key, auto_sync, grp) VALUES(?, ?, ?)
-		ON CONFLICT(account_key) DO UPDATE SET auto_sync = excluded.auto_sync, grp = excluded.grp`,
-		newKey, autoSync, grp); err != nil {
+		`INSERT INTO account_settings(account_key, auto_sync, grp, tags) VALUES(?, ?, ?, ?)
+		ON CONFLICT(account_key) DO UPDATE SET auto_sync = excluded.auto_sync, grp = excluded.grp, tags = excluded.tags`,
+		newKey, autoSync, grp, tags); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM account_settings WHERE account_key = ?`, oldKey); err != nil {

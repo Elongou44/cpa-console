@@ -13,7 +13,7 @@ const STATUS_OPTIONS = [
   { value: 'error', label: t('common.error') },
 ]
 
-/** 表格工具栏：搜索 + 状态多选 + 分组筛选 + 重置。 */
+/** 表格工具栏：搜索 + 状态多选 + 分组筛选 + 标签多选 + 重置。 */
 export function AccountsToolbar({
   q,
   onQChange,
@@ -22,6 +22,9 @@ export function AccountsToolbar({
   groups = [],
   group,
   onGroupChange,
+  tagOptions = [],
+  tags,
+  onTagsChange,
   filtered,
   onReset,
 }: {
@@ -33,6 +36,10 @@ export function AccountsToolbar({
   groups?: string[]
   group: string
   onGroupChange: (v: string) => void
+  /** 全部已有标签名。 */
+  tagOptions?: string[]
+  tags: string[]
+  onTagsChange: (v: string[]) => void
   filtered: boolean
   onReset: () => void
 }) {
@@ -92,6 +99,38 @@ export function AccountsToolbar({
           })}
         </PopoverContent>
       </Popover>
+
+      {tagOptions.length > 0 && (
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="sm" className="h-8">
+              {t('accounts.tags')}
+              {tags.length > 0 && (
+                <span className="ml-1 flex size-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground">
+                  {tags.length}
+                </span>
+              )}
+              <ChevronDown className="size-3.5 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="max-h-64 w-44 overflow-y-auto p-2">
+            {tagOptions.map((tag) => {
+              const checked = tags.includes(tag)
+              return (
+                <button
+                  key={tag}
+                  className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent"
+                  onClick={() => onTagsChange(checked ? tags.filter((x) => x !== tag) : [...tags, tag])}
+                >
+                  <Checkbox checked={checked} />
+                  <span className={cn('truncate', !checked && 'text-muted-foreground')}>{tag}</span>
+                  {checked && <Check className="ml-auto size-3.5 text-primary" />}
+                </button>
+              )
+            })}
+          </PopoverContent>
+        </Popover>
+      )}
 
       {filtered && (
         <Button variant="ghost" size="sm" className="h-8" onClick={onReset}>

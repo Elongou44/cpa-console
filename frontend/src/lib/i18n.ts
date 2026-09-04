@@ -96,6 +96,11 @@ const dict: Record<string, string> = {
   'accounts.group': '分组',
   'accounts.groupAll': '全部分组',
   'accounts.groupSet': '分组已更新',
+  'accounts.dialog.tags': '标签',
+  'accounts.dialog.tagsPlaceholder': '回车添加，可加多个',
+  'accounts.dialog.tagsHint': '仅本控制台的本地标记，不影响 CPA',
+  'accounts.tags': '标签',
+  'accounts.tagsSet': '标签已更新',
 
   'accounts.review.title': '模型审批 · {name}',
   'accounts.review.description': '审批通过后模型才会被发现与路由，未放行模型自动写入 CPA 屏蔽清单',
