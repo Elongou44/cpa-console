@@ -162,6 +162,20 @@ func (h *handler) getAccount(c *gin.Context) {
 	ok(c, gin.H{"account": acct, "models": models})
 }
 
+// accountModelsDetail 返回某账号在 CPA 中已加入的全部模型及其 alias 映射。
+func (h *handler) accountModelsDetail(c *gin.Context) {
+	key, valid := decodeKey(c)
+	if !valid {
+		return
+	}
+	detail, err := h.b.GetAccountModelsDetail(c.Request.Context(), key)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, detail)
+}
+
 func (h *handler) createAccount(c *gin.Context) {
 	var in biz.AccountInput
 	if err := c.ShouldBindJSON(&in); err != nil {

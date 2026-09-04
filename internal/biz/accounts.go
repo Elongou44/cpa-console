@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -394,7 +393,8 @@ func buildEntry(def collectionDef, in AccountInput) map[string]any {
 		models := make([]any, 0, len(in.Models))
 		for _, m := range in.Models {
 			if m = strings.TrimSpace(m); m != "" {
-				models = append(models, map[string]any{"name": m})
+				// 新加入的模型自动生成标准 alias（无需映射时省略 alias 字段）。
+				models = append(models, compatModelObj(m))
 			}
 		}
 		e["models"] = models
@@ -450,9 +450,10 @@ func (b *Biz) CreateAccount(ctx context.Context, in AccountInput) (Account, erro
 		rows := make([]store.AccountModel, 0, len(in.Models))
 		for _, m := range in.Models {
 			if m = strings.TrimSpace(m); m != "" {
+				obj := compatModelObj(m)
 				rows = append(rows, store.AccountModel{
 					AccountKey: acct.Key, AccountType: acct.Type, AccountName: acct.Name,
-					Model: m, Payload: jsonMarshalString(map[string]any{"name": m}),
+					Model: m, Alias: aliasOf(obj), Payload: jsonMarshalString(obj),
 				})
 			}
 		}
@@ -637,25 +638,15 @@ func (b *Biz) updateCompatModels(def collectionDef, accountKey string, entry map
 		}
 	}
 
-	// CPA 条目 models 收敛为本次提交的放行清单（保留原始 payload 以还原别名等字段）。
+	// CPA 条目 models 收敛为本次提交的放行清单（还原既有 payload / 别名，
+	// 缺失 alias 的新模型按标准规则自动补齐）。
 	approved, err := b.Store.ApprovedModels(accountKey)
 	if err != nil {
 		return err
 	}
 	models := make([]any, 0, len(approved))
 	for _, r := range approved {
-		if r.Payload != "" {
-			var obj map[string]any
-			if json.Unmarshal([]byte(r.Payload), &obj) == nil && obj != nil {
-				models = append(models, obj)
-				continue
-			}
-		}
-		obj := map[string]any{"name": r.Model}
-		if r.Alias != "" {
-			obj["alias"] = r.Alias
-		}
-		models = append(models, obj)
+		models = append(models, modelObjFromStored(r))
 	}
 	entry["models"] = models
 	return nil

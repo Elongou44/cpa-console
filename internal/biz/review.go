@@ -333,19 +333,7 @@ func (b *Biz) enforceCompatEntry(byAccount map[string]map[string]string, acct Ac
 		if seen[r.Model] {
 			continue
 		}
-		if r.Payload != "" {
-			var obj map[string]any
-			if json.Unmarshal([]byte(r.Payload), &obj) == nil && obj != nil {
-				kept = append(kept, obj)
-				seen[r.Model] = true
-				changed = true
-				continue
-			}
-		}
-		obj := map[string]any{"name": r.Model}
-		if r.Alias != "" {
-			obj["alias"] = r.Alias
-		}
+		obj := modelObjFromStored(r)
 		kept = append(kept, obj)
 		seen[r.Model] = true
 		changed = true

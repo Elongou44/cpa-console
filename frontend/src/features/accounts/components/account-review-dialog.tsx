@@ -155,13 +155,15 @@ export function AccountReviewDialog({
               <h3 className="text-sm font-semibold">{t('review.approved')}</h3>
               <Badge variant="secondary">{approved.length}</Badge>
             </div>
-            <div className={cn('flex flex-wrap gap-1.5 rounded-lg border p-2.5')}>
-              {approved.map((r) => (
-                <span key={r.model} className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 font-mono text-xs">
-                  {r.model}
-                </span>
-              ))}
-            </div>
+            <ScrollArea className="max-h-52 rounded-lg border">
+              <div className="flex flex-wrap gap-1.5 p-2.5">
+                {approved.map((r) => (
+                  <span key={r.model} className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 font-mono text-xs">
+                    {r.model}
+                  </span>
+                ))}
+              </div>
+            </ScrollArea>
           </section>
         )}
 

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Check, Loader2, Plus, RefreshCw, Search, X } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { Check, ChevronDown, Loader2, Plus, RefreshCw, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -17,10 +17,20 @@ export interface ModelTagInputProps {
   fetching?: boolean
 }
 
-/** 模型标签选择器：回车添加、点击标签移除、上游候选点选。 */
+/** 模型家族分组键：取 "/" 或 "-" 前的首段，如 gpt-4o-mini -> gpt、openai/gpt-4o -> openai。 */
+function familyOf(name: string): string {
+  const slash = name.indexOf('/')
+  if (slash > 0) return name.slice(0, slash)
+  const dash = name.indexOf('-')
+  if (dash > 0) return name.slice(0, dash)
+  return name
+}
+
+/** 模型标签选择器：回车添加、点击标签移除、上游候选按家族分组点选。 */
 export function ModelTagInput({ value, onChange, suggestions = [], onFetch, fetching }: ModelTagInputProps) {
   const [input, setInput] = useState('')
   const [filter, setFilter] = useState('')
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
 
   const add = (name: string) => {
     const v = name.trim()
@@ -59,6 +69,52 @@ export function ModelTagInput({ value, onChange, suggestions = [], onFetch, fetc
   const keyword = filter.trim().toLowerCase()
   const visibleSuggestions = keyword ? suggestions.filter((s) => s.toLowerCase().includes(keyword)) : suggestions
   const hasPending = suggestions.some((s) => !value.includes(s))
+
+  const groups = useMemo(() => {
+    const map = new Map<string, string[]>()
+    for (const s of visibleSuggestions) {
+      const fam = familyOf(s)
+      const list = map.get(fam)
+      if (list) list.push(s)
+      else map.set(fam, [s])
+    }
+    return [...map.entries()]
+      .map(([name, models]) => ({ name, models }))
+      .sort((a, b) => b.models.length - a.models.length || a.name.localeCompare(b.name))
+  }, [visibleSuggestions])
+
+  const setMany = (items: string[], on: boolean) => {
+    if (on) {
+      const merged = [...value]
+      for (const m of items) if (!merged.includes(m)) merged.push(m)
+      onChange(merged)
+    } else {
+      const set = new Set(items)
+      onChange(value.filter((m) => !set.has(m)))
+    }
+  }
+
+  const renderChips = (items: string[]) =>
+    items.map((s) => {
+      const selected = value.includes(s)
+      return (
+        <button
+          type="button"
+          key={s}
+          onClick={() => (selected ? remove(s) : add(s))}
+          className={cn(
+            'inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-xs transition-all active:scale-[0.97]',
+            selected
+              ? 'border-success/40 bg-success/10 text-success'
+              : 'border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground',
+          )}
+          title={s}
+        >
+          {selected ? <Check className="size-3 shrink-0" /> : <Plus className="size-3 shrink-0" />}
+          <span className="truncate">{s}</span>
+        </button>
+      )
+    })
 
   return (
     <div className="space-y-2">
@@ -103,7 +159,9 @@ export function ModelTagInput({ value, onChange, suggestions = [], onFetch, fetc
       {onFetch && (suggestions.length > 0 || fetching) && (
         <div className="rounded-lg border p-2">
           <div className="mb-1.5 flex items-center justify-between gap-2">
-            <span className="text-xs text-muted-foreground">{t('accounts.dialog.suggestions')}</span>
+            <span className="text-xs text-muted-foreground">
+              {t('accounts.dialog.suggestions')} · {suggestions.length}
+            </span>
             {suggestions.length > 8 && (
               <div className="relative w-40">
                 <Search className="absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
@@ -116,31 +174,44 @@ export function ModelTagInput({ value, onChange, suggestions = [], onFetch, fetc
               </div>
             )}
           </div>
-          <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto">
-            {visibleSuggestions.map((s) => {
-              const selected = value.includes(s)
-              return (
-                <button
-                  type="button"
-                  key={s}
-                  onClick={() => (selected ? remove(s) : add(s))}
-                  className={cn(
-                    'inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-xs transition-all active:scale-[0.97]',
-                    selected
-                      ? 'border-success/40 bg-success/10 text-success'
-                      : 'border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground',
-                  )}
-                  title={s}
-                >
-                  {selected ? <Check className="size-3 shrink-0" /> : <Plus className="size-3 shrink-0" />}
-                  <span className="truncate">{s}</span>
-                </button>
-              )
-            })}
-            {visibleSuggestions.length === 0 && !fetching && (
-              <span className="py-1 text-xs text-muted-foreground">{t('common.noData')}</span>
-            )}
-          </div>
+          {groups.length > 1 && !keyword ? (
+            <div className="max-h-64 space-y-1 overflow-y-auto pr-1">
+              {groups.map(({ name, models }) => {
+                const open = openGroups[name] ?? models.length <= 8
+                const allSelected = models.every((m) => value.includes(m))
+                return (
+                  <div key={name} className="rounded-md border bg-muted/20">
+                    <div className="flex items-center gap-1.5 px-2 py-1">
+                      <button
+                        type="button"
+                        className="flex flex-1 cursor-pointer select-none items-center gap-1.5 text-left"
+                        onClick={() => setOpenGroups((prev) => ({ ...prev, [name]: !(prev[name] ?? models.length <= 8) }))}
+                      >
+                        <ChevronDown className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', !open && '-rotate-90')} />
+                        <span className="text-xs font-medium">{name}</span>
+                        <span className="text-xs tabular-nums text-muted-foreground">{models.length}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="cursor-pointer text-xs text-muted-foreground transition-colors hover:text-foreground"
+                        onClick={() => setMany(models, !allSelected)}
+                      >
+                        {allSelected ? t('accounts.dialog.groupClear') : t('accounts.dialog.groupAll')}
+                      </button>
+                    </div>
+                    {open && <div className="flex flex-wrap gap-1.5 px-2 pb-2">{renderChips(models)}</div>}
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="flex max-h-64 flex-wrap gap-1.5 overflow-y-auto">
+              {renderChips(visibleSuggestions)}
+              {visibleSuggestions.length === 0 && !fetching && (
+                <span className="py-1 text-xs text-muted-foreground">{t('common.noData')}</span>
+              )}
+            </div>
+          )}
         </div>
       )}
 

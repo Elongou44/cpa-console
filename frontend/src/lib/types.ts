@@ -62,6 +62,19 @@ export interface ModelListResp {
   counts: Record<string, number>
 }
 
+export interface AccountModelAliasRow {
+  name: string
+  alias: string
+  suggestedAlias: string
+  excluded: boolean
+}
+
+export interface AccountModelsDetail {
+  account: Account
+  supportsAlias: boolean
+  models: AccountModelAliasRow[]
+}
+
 export interface ChangeRecord {
   id: number
   accountKey: string
