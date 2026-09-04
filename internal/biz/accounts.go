@@ -114,7 +114,7 @@ func (s *snapshot) addErr(format string, args ...any) {
 }
 
 // discover 拉取全部账号；withModels 时同时发现各账号可用模型。
-func (b *Biz) discover(ctx context.Context, c *cpa.Client, withModels bool) (*snapshot, error) {
+func (b *Biz) discover(ctx context.Context, c *cpa.Client, withModels bool, skip map[string]bool) (*snapshot, error) {
 	snap := &snapshot{keyItems: map[string][]map[string]any{}}
 	for _, def := range keyCollections {
 		items, err := c.GetKeyItems(ctx, def.Collection)
@@ -125,7 +125,8 @@ func (b *Biz) discover(ctx context.Context, c *cpa.Client, withModels bool) (*sn
 		snap.keyItems[def.Collection] = items
 		for _, entry := range items {
 			acct := keyAccountFrom(def, entry)
-			if withModels {
+			// skip 中的账号不拉取模型、不探测上游（已关闭自动同步的账号在周期同步中完全不动）。
+			if withModels && !skip[acct.Key] {
 				models := keyEntryModels(ctx, c, def, entry)
 				// openai-compatibility：额外探测上游 /v1/models，条目清单之外的新模型并入发现结果
 				//（进入待审批）。探测失败仅记录错误，不影响条目清单内的模型。
@@ -337,7 +338,7 @@ func (b *Biz) ListAccounts(ctx context.Context, q, status, typ string) ([]Accoun
 	if err != nil {
 		return nil, err
 	}
-	snap, err := b.discover(ctx, c, false)
+	snap, err := b.discover(ctx, c, false, nil)
 	if err != nil {
 		return nil, err
 	}

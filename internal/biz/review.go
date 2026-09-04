@@ -46,7 +46,18 @@ func (b *Biz) Sync(ctx context.Context, auto bool) (*SyncResult, error) {
 	}
 
 	res := &SyncResult{}
-	snap, err := b.discover(ctx, c, true)
+
+	// 已关闭自动同步的账号：发现阶段即跳过（不探测上游、不拉取模型），diff 与收敛也不处理。
+	var disabled map[string]bool
+	if auto {
+		var err error
+		disabled, err = b.Store.AutoSyncDisabledAccounts()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	snap, err := b.discover(ctx, c, true, disabled)
 	if err != nil {
 		return nil, err
 	}
@@ -54,16 +65,20 @@ func (b *Biz) Sync(ctx context.Context, auto bool) (*SyncResult, error) {
 	res.Accounts = len(snap.Accounts)
 	res.Models = len(snap.Models)
 
-	var disabled map[string]bool
-	if auto {
-		disabled, err = b.Store.AutoSyncDisabledAccounts()
-		if err != nil {
-			return nil, err
+	// 1) 重建可用模型快照；关闭自动同步的账号保留原快照，避免模型页状态被清空。
+	rebuild := snap.Models
+	if len(disabled) > 0 {
+		keys := make([]string, 0, len(disabled))
+		for k := range disabled {
+			keys = append(keys, k)
+		}
+		if preserved, err := b.Store.AccountModelsForAccounts(keys); err == nil {
+			rebuild = append(rebuild, preserved...)
+		} else {
+			slog.Warn("保留关闭账号快照失败", "err", err)
 		}
 	}
-
-	// 1) 重建可用模型快照。
-	if err := b.Store.ReplaceAccountModels(snap.Models); err != nil {
+	if err := b.Store.ReplaceAccountModels(rebuild); err != nil {
 		return nil, err
 	}
 
@@ -89,17 +104,8 @@ func (b *Biz) Sync(ctx context.Context, auto bool) (*SyncResult, error) {
 
 	// 3) diff 新模型：CPA 条目显式配置的模型（openai-compatibility 路由清单）自动放行，
 	// 上游探测发现的新模型与其他账号的新模型进入待审批。
-	// 自动同步已关闭的账号不参与 diff（不产生新的待审批记录）。
-	models := snap.Models
-	if len(disabled) > 0 {
-		models = make([]store.AccountModel, 0, len(snap.Models))
-		for _, m := range snap.Models {
-			if !disabled[m.AccountKey] {
-				models = append(models, m)
-			}
-		}
-	}
-	inserted, err := b.Store.InsertPending(models, func(m store.AccountModel) string {
+	// 关闭自动同步的账号已在发现阶段跳过，不会进入 diff。
+	inserted, err := b.Store.InsertPending(snap.Models, func(m store.AccountModel) string {
 		if m.FromConfig {
 			return StatusApproved
 		}
@@ -460,7 +466,7 @@ func (b *Biz) enforceAfterReview() {
 		slog.Warn("审批后收敛跳过：CPA 未配置", "err", err)
 		return
 	}
-	snap, err := b.discover(ctx, c, false)
+	snap, err := b.discover(ctx, c, false, nil)
 	if err != nil {
 		slog.Warn("审批后收敛失败：发现失败", "err", err)
 		return

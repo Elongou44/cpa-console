@@ -188,6 +188,35 @@ type AccountModel struct {
 	FromConfig bool
 }
 
+// AccountModelsForAccounts 返回指定账号当前的可用模型快照（用于保留关闭自动同步账号的旧快照）。
+func (s *Store) AccountModelsForAccounts(accountKeys []string) ([]AccountModel, error) {
+	if len(accountKeys) == 0 {
+		return nil, nil
+	}
+	var out []AccountModel
+	for _, key := range accountKeys {
+		rows, err := s.DB.Query(
+			`SELECT account_key, account_type, account_name, model_name, alias FROM account_models WHERE account_key = ?`, key)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var m AccountModel
+			if err := rows.Scan(&m.AccountKey, &m.AccountType, &m.AccountName, &m.Model, &m.Alias); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out = append(out, m)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
+
 // ReplaceAccountModels 全量重建可用模型快照。
 func (s *Store) ReplaceAccountModels(rows []AccountModel) error {
 	tx, err := s.DB.Begin()
