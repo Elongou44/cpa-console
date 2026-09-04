@@ -42,6 +42,7 @@
 | 审批放行/拒绝、屏蔽清单收敛 | `internal/biz/review.go` | 强管控核心，幂等收敛 `excluded-models` |
 | 账号模型清单/明细 | `internal/biz/account_models.go` | |
 | 别名映射规则 | `internal/biz/alias.go`（+ `alias_test.go`） | 纯逻辑有单测，改动先跑 `go test ./internal/biz/` |
+| 模型库聚合与账号级移除 | `internal/biz/library.go` | `GET /api/library`、`POST /api/library/remove`；compat 真删条目模型，其余类型 rejected+收敛屏蔽 |
 | 调 CPA 的 Management API | `internal/cpa/client.go` | 所有对 `/v0/management` 的封装集中在此 |
 | 设置/审批状态/变更记录的持久化 | `internal/store/store.go` | SQLite 纯 Go 驱动，无 CGO |
 | 依赖注入/服务装配 | `internal/biz/biz.go` | Biz 聚合各领域逻辑 |
@@ -53,7 +54,7 @@
 | 要改什么 | 入手文件 | 说明 |
 | --- | --- | --- |
 | 新页面/新路由 | `frontend/src/routes.tsx` → 新建 `features/<名>/index.tsx` | 每个 feature 三件套：`index.tsx` 页面、`components/` 弹窗表格、`data/hooks.ts` 请求 |
-| 某个页面功能 | `frontend/src/features/accounts|models|aliases|settings/` | 账号、待审批（models 目录，含模型库 Tab，后续会拆独立页面）、别名映射、设置 |
+| 某个页面功能 | `frontend/src/features/accounts|models|library|aliases|settings/` | 账号、待审批、模型库（独立页）、别名映射、设置 |
 | 加一个 API 调用 | 对应 feature 的 `data/hooks.ts` + `frontend/src/lib/api.ts` | 统一 TanStack Query mutation/query |
 | 共享类型 | `frontend/src/lib/types.ts` | 与后端 JSON 字段对应，改接口时同步 |
 | 新文案 | `frontend/src/lib/i18n.ts` | 扁平 key 字典，禁止硬编码中文 |
