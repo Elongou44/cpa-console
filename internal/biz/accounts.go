@@ -799,6 +799,17 @@ func (b *Biz) ProbeUpstream(ctx context.Context, typ, apiKey, base string) ([]st
 	return b.probeUpstream(ctx, typ, apiKey, base)
 }
 
+// trimVersionSuffix 去掉 base 末尾的版本段（如 /v1、/v1beta），避免拼出 /v1/v1/models 这类重复路径。
+func trimVersionSuffix(base string) string {
+	base = strings.TrimRight(base, "/")
+	for _, v := range []string{"/v1beta", "/v1alpha", "/v1"} {
+		if strings.HasSuffix(base, v) {
+			return strings.TrimSuffix(base, v)
+		}
+	}
+	return base
+}
+
 func (b *Biz) probeUpstream(ctx context.Context, typ, apiKey, base string) ([]string, error) {
 	pctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -807,7 +818,7 @@ func (b *Biz) probeUpstream(ctx context.Context, typ, apiKey, base string) ([]st
 		if base == "" {
 			return nil, fmt.Errorf("该账号未配置 Base URL")
 		}
-		data, err := probe(pctx, strings.TrimRight(base, "/")+"/v1/models", map[string]string{"Authorization": "Bearer " + apiKey})
+		data, err := probe(pctx, trimVersionSuffix(base)+"/v1/models", map[string]string{"Authorization": "Bearer " + apiKey})
 		if err != nil {
 			return nil, err
 		}
@@ -820,7 +831,7 @@ func (b *Biz) probeUpstream(ctx context.Context, typ, apiKey, base string) ([]st
 		if base == "" {
 			base = "https://generativelanguage.googleapis.com"
 		}
-		u := strings.TrimRight(base, "/") + "/v1beta/models?pageSize=200&key=" + url.QueryEscape(apiKey)
+		u := trimVersionSuffix(base) + "/v1beta/models?pageSize=200&key=" + url.QueryEscape(apiKey)
 		data, err := probe(pctx, u, nil)
 		if err != nil {
 			return nil, err
@@ -834,7 +845,7 @@ func (b *Biz) probeUpstream(ctx context.Context, typ, apiKey, base string) ([]st
 		if base == "" {
 			base = "https://api.anthropic.com"
 		}
-		u := strings.TrimRight(base, "/") + "/v1/models?limit=100"
+		u := trimVersionSuffix(base) + "/v1/models?limit=100"
 		data, err := probe(pctx, u, map[string]string{"x-api-key": apiKey, "anthropic-version": "2023-06-01"})
 		if err != nil {
 			return nil, err
@@ -848,7 +859,7 @@ func (b *Biz) probeUpstream(ctx context.Context, typ, apiKey, base string) ([]st
 		if base == "" {
 			base = "https://api.x.ai"
 		}
-		data, err := probe(pctx, strings.TrimRight(base, "/")+"/v1/models", map[string]string{"Authorization": "Bearer " + apiKey})
+		data, err := probe(pctx, trimVersionSuffix(base)+"/v1/models", map[string]string{"Authorization": "Bearer " + apiKey})
 		if err != nil {
 			return nil, err
 		}
