@@ -8,8 +8,8 @@ const dict: Record<string, string> = {
 
   'nav.accounts': '账号',
   'nav.accountsDesc': '管理 CPA 账号与凭据',
-  'nav.models': '模型',
-  'nav.modelsDesc': '审批放行 · 强管控发现',
+  'nav.models': '待审批',
+  'nav.modelsDesc': '发现模型的审批放行',
   'nav.aliases': '别名映射',
   'nav.aliasesDesc': '查看账号已加入模型与 alias',
   'nav.settings': '设置',
@@ -129,8 +129,8 @@ const dict: Record<string, string> = {
   'review.action.restored': '恢复',
   'review.action.removed': '移除',
 
-  'models.title': '模型',
-  'models.description': '跨账号模型库：审批放行、关联映射与变更追踪',
+  'models.title': '待审批',
+  'models.description': '同步发现模型的审批放行：通过后才会被发现与路由',
   'models.columns.model': '模型',
   'models.columns.alias': '别名',
   'models.columns.accounts': '提供账号',
