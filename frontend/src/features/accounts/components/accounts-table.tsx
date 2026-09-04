@@ -107,7 +107,19 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
               <TableCell className="text-center">
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Switch checked={account.autoSync} onCheckedChange={() => actions.onAutoSync(account)} />
+                    <button
+                      type="button"
+                      onClick={() => actions.onAutoSync(account)}
+                      className={cn(
+                        'inline-flex h-6 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors',
+                        account.autoSync
+                          ? 'border-success/40 bg-success/10 text-success hover:bg-success/20'
+                          : 'border-border bg-muted/40 text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      <span className={cn('size-1.5 rounded-full', account.autoSync ? 'bg-success' : 'bg-muted-foreground/60')} />
+                      {account.autoSync ? t('accounts.autoSyncOnBadge') : t('accounts.autoSyncOffBadge')}
+                    </button>
                   </TooltipTrigger>
                   <TooltipContent>{t('accounts.autoSyncHint')}</TooltipContent>
                 </Tooltip>
