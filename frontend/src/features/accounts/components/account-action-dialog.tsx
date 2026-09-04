@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Eye, EyeOff, Loader2 } from 'lucide-react'
+import { ClipboardPaste, Eye, EyeOff, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,6 +11,34 @@ import type { Account, AccountInput } from '@/lib/types'
 import { useAccountDetail, useCreateAccount, useFetchUpstreamModels, useUpdateAccount } from '../data/hooks'
 import { ModelTagInput } from './model-tag-input'
 import { TagInput } from './tag-input'
+
+/** 从剪贴板文本中识别 API Key 与 Base URL：支持纯 Key、纯 URL、`key=xxx`/`url=xxx` 标签、同段混合文本。 */
+export function parseClipboardAccount(text: string): { apiKey?: string; baseUrl?: string } {
+  const out: { apiKey?: string; baseUrl?: string } = {}
+  if (!text) return out
+
+  // 1. URL：任意 http(s) 链接，截掉常见尾随标点
+  const urlMatch = text.match(/https?:\/\/[^\s'"，,；;）)】》]+/)
+  if (urlMatch) out.baseUrl = urlMatch[0]
+  // 剥离 URL 段后再识别 Key，避免 URL 中的 key= 参数造成误匹配
+  const rest = text.replace(urlMatch?.[0] ?? '', ' ')
+
+  // 2. Key：优先带标签的（api-key: xxx / key = xxx / 密钥：xxx）
+  let key: string | undefined
+  const keyLabeled = rest.match(/(?:api[-_]?key|access[-_]?key|key|密钥|令牌)\s*[:=]\s*([A-Za-z0-9._\-]+)/i)
+  if (keyLabeled) key = keyLabeled[1]
+
+  // 3. 无标签时：找 sk- 前缀或足够长的 token
+  if (!key) {
+    const tokens = rest
+      .split(/[\s,;，；'"「」【】《》]+/)
+      .map((t) => t.trim())
+      .filter((t) => t && !/[:=]$/.test(t))
+    key = tokens.find((t) => /^sk-[A-Za-z0-9._\-]+$/.test(t) || /^[A-Za-z0-9._\-]{20,}$/.test(t))
+  }
+  if (key) out.apiKey = key
+  return out
+}
 
 const KEY_TYPES = [
   { value: 'openai-compatibility', label: 'OpenAI 兼容' },
@@ -75,6 +103,28 @@ export function AccountActionDialog({
   }, [open, isEdit, detailQuery.data])
 
   const busy = createMutation.isPending || updateMutation.isPending
+
+  const importFromClipboard = async () => {
+    let text = ''
+    try {
+      text = await navigator.clipboard.readText()
+    } catch {
+      toast.error(t('accounts.dialog.clipboardDenied'))
+      return
+    }
+    const parsed = parseClipboardAccount(text)
+    if (!parsed.apiKey && !parsed.baseUrl) {
+      toast.warning(t('accounts.dialog.clipboardEmpty'))
+      return
+    }
+    if (parsed.apiKey) setApiKey(parsed.apiKey)
+    if (parsed.baseUrl) setBaseUrl(parsed.baseUrl)
+    const detail = [
+      parsed.apiKey ? 'API Key' : '',
+      parsed.baseUrl ? t('accounts.dialog.baseUrl') : '',
+    ].filter(Boolean)
+    toast.success(t('accounts.dialog.clipboardOk', { detail: detail.join('、') }))
+  }
 
   const submit = () => {
     if (!isEdit && !apiKey.trim()) {
@@ -166,10 +216,20 @@ export function AccountActionDialog({
           )}
 
           <div className="space-y-1.5">
-            <Label>
-              {t('accounts.dialog.apiKey')}
-              {!isEdit && <span className="ml-1 text-destructive">*</span>}
-            </Label>
+            <div className="flex items-center justify-between">
+              <Label>
+                {t('accounts.dialog.apiKey')}
+                {!isEdit && <span className="ml-1 text-destructive">*</span>}
+              </Label>
+              <button
+                type="button"
+                className="inline-flex cursor-pointer items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                onClick={importFromClipboard}
+              >
+                <ClipboardPaste className="size-3" />
+                {t('accounts.dialog.clipboardImport')}
+              </button>
+            </div>
             <div className="relative">
               <Input
                 type={showKey ? 'text' : 'password'}

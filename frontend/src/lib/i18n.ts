@@ -101,6 +101,10 @@ const dict: Record<string, string> = {
   'accounts.dialog.tagsHint': '仅本控制台的本地标记，不影响 CPA',
   'accounts.tags': '标签',
   'accounts.tagsSet': '标签已更新',
+  'accounts.dialog.clipboardImport': '从剪贴板导入',
+  'accounts.dialog.clipboardOk': '已导入：{detail}',
+  'accounts.dialog.clipboardEmpty': '剪贴板中没有识别到 API Key 或 URL',
+  'accounts.dialog.clipboardDenied': '无法读取剪贴板，请手动粘贴到输入框',
 
   'accounts.review.title': '模型审批 · {name}',
   'accounts.review.description': '审批通过后模型才会被发现与路由，未放行模型自动写入 CPA 屏蔽清单',
