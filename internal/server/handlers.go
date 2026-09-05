@@ -256,6 +256,27 @@ func (h *handler) accountModelsDetail(c *gin.Context) {
 	ok(c, detail)
 }
 
+// modelAliasSet 修改 OpenAI 兼容账号下某模型的 alias（alias 为空串表示清除映射）。
+func (h *handler) modelAliasSet(c *gin.Context) {
+	key, valid := decodeKey(c)
+	if !valid {
+		return
+	}
+	var in struct {
+		Model string `json:"model"`
+		Alias string `json:"alias"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil || in.Model == "" {
+		fail(c, err)
+		return
+	}
+	if err := h.b.SetAccountModelAlias(c.Request.Context(), key, in.Model, in.Alias); err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, gin.H{})
+}
+
 func (h *handler) createAccount(c *gin.Context) {
 	var in biz.AccountInput
 	if err := c.ShouldBindJSON(&in); err != nil {

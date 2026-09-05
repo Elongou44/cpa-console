@@ -1268,21 +1268,25 @@ func (b *Biz) CheckConnectivity(ctx context.Context, keys []string) ([]Connectiv
 	b.lastConnAt = time.Now()
 	b.mu.Unlock()
 
-	// 连续失败计数：成功清零，失败累加（供「连续失败自动停用」判断与展示）。
+	// 连续失败/成功计数：失败累加成功清零、成功累加失败清零（供自动停用/恢复判断与展示）。
 	prevConns, _ := b.Store.AccountConns()
 	fails := map[string]int{}
+	oks := map[string]int{}
 	for i := range results {
 		res := &results[i]
 		if res.Key == "" {
 			continue
 		}
 		fails[res.Key] = 0
-		if !res.OK {
+		oks[res.Key] = 0
+		if res.OK {
+			oks[res.Key] = prevConns[res.Key].Oks + 1
+		} else {
 			fails[res.Key] = prevConns[res.Key].Fails + 1
 		}
 		_ = b.Store.SetAccountConn(res.Key, store.ConnStatus{
 			OK: res.OK, LatencyMs: res.LatencyMs, Models: res.Models, Error: res.Error,
-			Fails: fails[res.Key], CheckedAt: checked,
+			Fails: fails[res.Key], Oks: oks[res.Key], CheckedAt: checked,
 		})
 	}
 
@@ -1305,7 +1309,8 @@ func (b *Biz) CheckConnectivity(ctx context.Context, keys []string) ([]Connectiv
 				}
 				// PATCH 逐条停用（PUT 整体替换会丢 disabled 字段），CPA 立即停止路由。
 				// 兼容型写原生 disabled；codex 等无该字段的类型与 CPA UI 一致：通配 "*" 屏蔽全部模型。
-				if def.Type == "openai-compatibility" {
+				isCompat := def.Type == "openai-compatibility"
+				if isCompat {
 					entry["disabled"] = true
 				} else {
 					excludeAllModels(entry)
@@ -1315,6 +1320,8 @@ func (b *Biz) CheckConnectivity(ctx context.Context, keys []string) ([]Connectiv
 					slog.Warn("自动停用写入 CPA 失败", "account", acct.Name, "err", err)
 					continue
 				}
+				// 打上守卫标记：此后连续成功达标可自动恢复（手动停用会清掉该标记）。
+				_ = b.Store.SetAccountAutoDisabled(acct.Key, true)
 				slog.Warn("连通性连续失败，已自动停用账号", "account", acct.Name, "fails", fails[acct.Key], "threshold", threshold)
 				recs = append(recs, store.ChangeRecord{
 					AccountKey: acct.Key, AccountType: acct.Type, AccountName: acct.Name,
@@ -1322,12 +1329,52 @@ func (b *Biz) CheckConnectivity(ctx context.Context, keys []string) ([]Connectiv
 				})
 			}
 		}
-		if len(recs) > 0 {
-			_ = b.Store.InsertChangeRecords(recs)
+			if len(recs) > 0 {
+				_ = b.Store.InsertChangeRecords(recs)
+			}
+			// 恢复：守卫自动停用的账号连续成功达到同一阈值时自动重新启用
+			// （手动启停会清除守卫标记，因此手动停用的账号永不被自动恢复）。
+			autoDisabled, _ := b.Store.AccountAutoDisabled()
+			if len(autoDisabled) > 0 {
+				var restRecs []store.ChangeRecord
+				for _, def := range keyCollections {
+					items := snap.keyItems[def.Collection]
+					for idx, entry := range items {
+						acct := keyAccountFrom(def, entry)
+						if !autoDisabled[acct.Key] || !acct.Disabled || oks[acct.Key] < threshold {
+							continue
+						}
+						// 兼容型显式写 disabled=false（PATCH 缺省键被视为「不修改」）；
+						// codex 等类型移除通配 "*"，PATCH 合并清不掉空数组需 PUT 整集合。
+						if def.Type == "openai-compatibility" {
+							entry["disabled"] = false
+							if err := c.PatchKeyItem(ctx, def.Collection, idx, entry); err != nil {
+								slog.Warn("自动恢复写入 CPA 失败", "account", acct.Name, "err", err)
+								continue
+							}
+						} else {
+							enableAllModels(entry)
+							_ = b.Store.SetAccountLocalDisabled(acct.Key, false)
+							if err := c.PutKeyItems(ctx, def.Collection, items); err != nil {
+								slog.Warn("自动恢复写入 CPA 失败", "account", acct.Name, "err", err)
+								continue
+							}
+						}
+						_ = b.Store.SetAccountAutoDisabled(acct.Key, false)
+						slog.Warn("连通性连续恢复，已自动启用账号", "account", acct.Name, "oks", oks[acct.Key], "threshold", threshold)
+						restRecs = append(restRecs, store.ChangeRecord{
+							AccountKey: acct.Key, AccountType: acct.Type, AccountName: acct.Name,
+							Action: "auto-restored",
+						})
+					}
+				}
+				if len(restRecs) > 0 {
+					_ = b.Store.InsertChangeRecords(restRecs)
+				}
+			}
 		}
+		return results, nil
 	}
-	return results, nil
-}
 
 // SetKeyAccountDisabled 启用/停用 Key 型账号（写入 CPA 条目 disabled 字段）。
 func (b *Biz) SetKeyAccountDisabled(ctx context.Context, key string, disabled bool) error {
@@ -1364,6 +1411,8 @@ func (b *Biz) SetKeyAccountDisabled(ctx context.Context, key string, disabled bo
 			enableAllModels(entry)
 			_ = b.Store.SetAccountLocalDisabled(key, false)
 		}
+		// 手动启停一律清除守卫标记：手动停用的账号不参与自动恢复。
+		_ = b.Store.SetAccountAutoDisabled(key, false)
 		// 写回：兼容型 PATCH 双向生效；codex 的启用需清空屏蔽清单，
 		// 而 PATCH 按字段合并清不掉空数组，必须 PUT 整集合。随后回读校验实际状态。
 		if isCompat || disabled {

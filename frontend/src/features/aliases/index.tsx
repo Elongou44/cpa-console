@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Loader2, RefreshCw } from 'lucide-react'
+import { Loader2, Pencil, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { PageBody, PageHeader } from '@/components/layout/page-header'
@@ -13,6 +14,7 @@ import { cn } from '@/lib/utils'
 import type { AccountModelAliasRow } from '@/lib/types'
 import { useAccounts } from '@/features/accounts/data/hooks'
 import { useAccountModelsDetail } from './data/hooks'
+import { AliasEditDialog } from './components/alias-edit-dialog'
 
 /** 别名映射：查看某账号在 CPA 中已加入的全部模型及其 alias。 */
 export default function AliasesPage() {
@@ -48,6 +50,13 @@ export default function AliasesPage() {
 
   const refresh = () => detailQuery.refetch()
   const refreshing = detailQuery.isFetching
+
+  const [editing, setEditing] = useState<AccountModelAliasRow | null>(null)
+  const [editOpen, setEditOpen] = useState(false)
+  const openEdit = (row: AccountModelAliasRow) => {
+    setEditing(row)
+    setEditOpen(true)
+  }
 
   return (
     <div>
@@ -106,14 +115,30 @@ export default function AliasesPage() {
             {rows.length === 0 ? t('common.noData') : t('aliases.searchNoMatch')}
           </div>
         ) : (
-          <AliasesTable rows={filtered} supportsAlias={detailQuery.data?.supportsAlias ?? false} />
+          <>
+            <AliasesTable rows={filtered} supportsAlias={detailQuery.data?.supportsAlias ?? false} onEdit={openEdit} />
+            <AliasEditDialog
+              open={editOpen}
+              onOpenChange={setEditOpen}
+              accountKey={accountKey}
+              row={editing}
+            />
+          </>
         )}
       </PageBody>
     </div>
   )
 }
 
-function AliasesTable({ rows, supportsAlias }: { rows: AccountModelAliasRow[]; supportsAlias: boolean }) {
+function AliasesTable({
+  rows,
+  supportsAlias,
+  onEdit,
+}: {
+  rows: AccountModelAliasRow[]
+  supportsAlias: boolean
+  onEdit: (row: AccountModelAliasRow) => void
+}) {
   return (
     <div className="overflow-hidden rounded-2xl border bg-card shadow-sm">
       <Table>
@@ -122,8 +147,9 @@ function AliasesTable({ rows, supportsAlias }: { rows: AccountModelAliasRow[]; s
             <TableHead className="pl-5">{t('aliases.columns.model')}</TableHead>
             {supportsAlias && <TableHead>{t('aliases.columns.alias')}</TableHead>}
             {supportsAlias && <TableHead>{t('aliases.columns.suggested')}</TableHead>}
-            <TableHead>{t('aliases.columns.kind')}</TableHead>
-            <TableHead className="pr-5 text-right">{t('aliases.columns.status')}</TableHead>
+            {supportsAlias && <TableHead>{t('aliases.columns.kind')}</TableHead>}
+            <TableHead className="text-right">{t('aliases.columns.status')}</TableHead>
+            {supportsAlias && <TableHead className="pr-5 text-right">{t('aliases.columns.actions')}</TableHead>}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -164,13 +190,25 @@ function AliasesTable({ rows, supportsAlias }: { rows: AccountModelAliasRow[]; s
                     )}
                   </TableCell>
                 )}
-                <TableCell className="pr-5 text-right">
+                <TableCell className="text-right">
                   {r.excluded ? (
                     <span className="text-xs text-warning">{t('aliases.status.excludedText')}</span>
                   ) : (
                     <span className="text-xs text-success">{t('aliases.status.joined')}</span>
                   )}
                 </TableCell>
+                {supportsAlias && (
+                  <TableCell className="pr-5 text-right">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button variant="ghost" size="icon-sm" onClick={() => onEdit(r)}>
+                          <Pencil className="size-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t('aliases.edit.action')}</TooltipContent>
+                    </Tooltip>
+                  </TableCell>
+                )}
               </TableRow>
             )
           })}

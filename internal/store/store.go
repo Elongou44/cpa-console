@@ -118,7 +118,11 @@ CREATE TABLE IF NOT EXISTS account_settings (
 	}
 	// 控制台侧停用标记：codex 等无原生 disabled 字段的类型用它记录停用状态
 	// （停用动作写 excluded-models=["*"] 阻断路由，收敛阶段跳过这些账号）。
-	return s.ensureColumn("account_settings", "disabled_local", "INTEGER NOT NULL DEFAULT 0")
+	if err := s.ensureColumn("account_settings", "disabled_local", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	// 守卫自动停用标记：区分「守卫停用」（连续成功达标后可自动恢复）与「手动停用」（永不自动恢复）。
+	return s.ensureColumn("account_settings", "disabled_auto", "INTEGER NOT NULL DEFAULT 0")
 }
 
 // ConnStatus 单账号上游连通性检测结果。
@@ -127,7 +131,8 @@ type ConnStatus struct {
 	LatencyMs int64  `json:"latencyMs"`
 	Models    int    `json:"models"`
 	Error     string `json:"error,omitempty"`
-	Fails     int    `json:"fails"` // 连续失败次数（成功清零），供自动禁用判断与展示
+	Fails     int    `json:"fails"` // 连续失败次数（成功清零），供自动停用判断与展示
+	Oks       int    `json:"oks"`   // 连续成功次数（失败清零），供自动恢复判断
 	CheckedAt string `json:"checkedAt"`
 }
 
@@ -263,6 +268,42 @@ func (s *Store) ReplaceAccountModels(rows []AccountModel) error {
 	for _, r := range rows {
 		if _, err := stmt.Exec(r.AccountKey, r.AccountType, r.AccountName, r.Model, r.Alias, ts); err != nil {
 			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// UpdateModelAlias 更新某账号某模型的别名：同步可用性快照的 alias 列与审批
+// payload 中的 alias 字段（空值删除字段），保证收敛还原时不回退自定义映射。
+func (s *Store) UpdateModelAlias(accountKey, model, alias string) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(
+		`UPDATE account_models SET alias = ? WHERE account_key = ? AND model_name = ?`, alias, accountKey, model); err != nil {
+		return err
+	}
+	var payload string
+	err = tx.QueryRow(`SELECT payload FROM model_status WHERE account_key = ? AND model_name = ?`, accountKey, model).Scan(&payload)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if payload != "" {
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(payload), &obj); err == nil && obj != nil {
+			if alias == "" {
+				delete(obj, "alias")
+			} else {
+				obj["alias"] = alias
+			}
+			if b, jerr := json.Marshal(obj); jerr == nil {
+				if _, err := tx.Exec(
+					`UPDATE model_status SET payload = ? WHERE account_key = ? AND model_name = ?`, string(b), accountKey, model); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return tx.Commit()
@@ -808,6 +849,36 @@ func (s *Store) SetAccountLocalDisabled(accountKey string, disabled bool) error 
 	_, err := s.DB.Exec(
 		`INSERT INTO account_settings(account_key, disabled_local) VALUES(?, ?)
 		ON CONFLICT(account_key) DO UPDATE SET disabled_local = excluded.disabled_local`, accountKey, v)
+	return err
+}
+
+// AccountAutoDisabled 返回被守卫自动停用的账号标识。
+func (s *Store) AccountAutoDisabled() (map[string]bool, error) {
+	rows, err := s.DB.Query(`SELECT account_key FROM account_settings WHERE disabled_auto = 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out[k] = true
+	}
+	return out, rows.Err()
+}
+
+// SetAccountAutoDisabled 写入守卫自动停用标记（手动启停时应清除）。
+func (s *Store) SetAccountAutoDisabled(accountKey string, disabled bool) error {
+	v := 0
+	if disabled {
+		v = 1
+	}
+	_, err := s.DB.Exec(
+		`INSERT INTO account_settings(account_key, disabled_auto) VALUES(?, ?)
+		ON CONFLICT(account_key) DO UPDATE SET disabled_auto = excluded.disabled_auto`, accountKey, v)
 	return err
 }
 
