@@ -4,15 +4,15 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { t } from '@/lib/i18n'
 import { api } from '@/lib/api'
-import { encodeKey } from '@/lib/utils'
+import { cn, encodeKey } from '@/lib/utils'
 import type { Account, AccountInput } from '@/lib/types'
 import { useAccountDetail, useCreateAccount, useFetchUpstreamModels, useUpdateAccount } from '../data/hooks'
 import { ModelSuggestionsPanel, ModelTagInput } from './model-tag-input'
 import { TagInput } from './tag-input'
-import { cn } from '@/lib/utils'
 
 /** 从剪贴板文本中识别 API Key 与 Base URL：支持纯 Key、纯 URL、`key=xxx`/`url=xxx` 标签、同段混合文本。 */
 export function parseClipboardAccount(text: string): { apiKey?: string; baseUrl?: string } {
@@ -45,6 +45,11 @@ export function parseClipboardAccount(text: string): { apiKey?: string; baseUrl?
 /** OpenAI 兼容账号的 Base URL 规范化：去掉已有 /v1 后统一补上，兼容导入的 URL 带或不带 /v1。 */
 function normalizeOpenAIBaseUrl(url: string): string {
   return url.replace(/\/+$/, '').replace(/\/v1$/i, '') + '/v1'
+}
+
+/** 多行文本 → 去空白、去重后的 Key 列表（Key 输入框一行一个）。 */
+function parseKeys(text: string): string[] {
+  return [...new Set(text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean))]
 }
 
 const KEY_TYPES = [
@@ -81,7 +86,7 @@ export function AccountActionDialog({
 
   const [type, setType] = useState('openai-compatibility')
   const [name, setName] = useState('')
-  const [apiKey, setApiKey] = useState('')
+  const [keysText, setKeysText] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [group, setGroup] = useState('')
   const [tags, setTags] = useState<string[]>([])
@@ -92,8 +97,8 @@ export function AccountActionDialog({
   const [showKey, setShowKey] = useState(false)
   // 右侧栏当前展示内容：Key 面板 / 候选模型面板 / 收起；打开时弹窗整体加宽
   const [panel, setPanel] = useState<'key' | 'models' | null>(null)
-  // 编辑时懒加载的完整 Key（点眼睛才向本机接口取）；null 表示尚未获取
-  const [revealedKey, setRevealedKey] = useState<string | null>(null)
+  // 编辑时懒加载的完整 Key 列表（点眼睛才向本机接口取）；null 表示尚未获取
+  const [revealedKeys, setRevealedKeys] = useState<string[] | null>(null)
 
   // 依赖用 account.key 而非 account 对象：列表 20s 轮询会生成新对象引用，
   // 若依赖对象本身，弹窗打开期间轮询到数据变化就会把正在输入的 Key 清空。
@@ -101,7 +106,7 @@ export function AccountActionDialog({
     if (!open) return
     setType(account?.type ?? 'openai-compatibility')
     setName(account?.type === 'openai-compatibility' ? account.name : '')
-    setApiKey('')
+    setKeysText('')
     setBaseUrl(account?.baseUrl ?? '')
     setGroup(account?.group ?? '')
     setTags(account?.tags ?? [])
@@ -111,7 +116,7 @@ export function AccountActionDialog({
     setSuggestions([])
     setShowKey(false)
     setPanel(null)
-    setRevealedKey(null)
+    setRevealedKeys(null)
   }, [open, account?.key])
 
   // 编辑时回填当前模型列表。
@@ -122,6 +127,13 @@ export function AccountActionDialog({
   }, [open, isEdit, detailQuery.data])
 
   const busy = createMutation.isPending || updateMutation.isPending
+
+  // 编辑态未点眼睛前，Key 输入框的掩码展示（只读）
+  const maskedKeys = account?.apiKeyMasked
+    ? account.apiKeyMasked + ((account.keyCount ?? 1) > 1 ? `（共 ${account.keyCount} 个）` : '')
+    : ''
+  // Key 面板展示的列表：输入框实时内容（编辑时点眼睛后回填为已存 Key）
+  const panelKeys = parseKeys(keysText)
 
   const importFromClipboard = async () => {
     let text = ''
@@ -136,7 +148,13 @@ export function AccountActionDialog({
       toast.warning(t('accounts.dialog.clipboardEmpty'))
       return
     }
-    if (parsed.apiKey) setApiKey(parsed.apiKey)
+    if (parsed.apiKey) {
+      setKeysText((prev) => {
+        const lines = parseKeys(prev)
+        if (lines.includes(parsed.apiKey!)) return prev
+        return [...lines, parsed.apiKey!].join('\n')
+      })
+    }
     if (parsed.baseUrl) {
       // OpenAI 兼容账号统一以 /v1 结尾；其他类型按原样填入
       setBaseUrl(type === 'openai-compatibility' ? normalizeOpenAIBaseUrl(parsed.baseUrl) : parsed.baseUrl)
@@ -148,9 +166,23 @@ export function AccountActionDialog({
     toast.success(t('accounts.dialog.clipboardOk', { detail: detail.join('、') }))
   }
 
+  const copyText = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.success(t('common.copySuccess'))
+    } catch {
+      toast.error(t('accounts.dialog.clipboardDenied'))
+    }
+  }
+
   const submit = () => {
-    if (!isEdit && !apiKey.trim()) {
+    const keys = parseKeys(keysText)
+    if (!isEdit && keys.length === 0) {
       toast.warning(t('accounts.dialog.required'))
+      return
+    }
+    if (keys.length > 1 && type !== 'openai-compatibility') {
+      toast.warning(t('accounts.dialog.multiKeyUnsupported'))
       return
     }
     if (type === 'openai-compatibility' && !name.trim()) {
@@ -164,7 +196,7 @@ export function AccountActionDialog({
     const input: AccountInput = {
       type,
       name: name.trim() || undefined,
-      apiKey: apiKey.trim() || undefined,
+      apiKeys: keys.length ? keys : undefined,
       baseUrl: baseUrl.trim() || undefined,
       models: type === 'openai-compatibility' ? models : undefined,
       group: group.trim(),
@@ -180,13 +212,14 @@ export function AccountActionDialog({
   }
 
   const fetchModels = () => {
-    if (!account && !apiKey.trim()) {
+    const firstKey = parseKeys(keysText)[0] ?? ''
+    if (!account && !firstKey) {
       toast.warning(t('accounts.dialog.required'))
       return
     }
     const input = account
       ? { key: account.key, ua: ua.trim() || undefined }
-      : { type, apiKey: apiKey.trim(), baseUrl: baseUrl.trim(), ua: ua.trim() || undefined }
+      : { type, apiKey: firstKey, baseUrl: baseUrl.trim(), ua: ua.trim() || undefined }
     fetchModelsMutation.mutate(input, {
       onSuccess: (res) => {
         toast.success(t('accounts.dialog.fetched', { count: res.models.length }))
@@ -197,30 +230,22 @@ export function AccountActionDialog({
 
   const isCompat = type === 'openai-compatibility'
 
-  // 面板展示的 Key：优先用户新输入的，其次编辑时懒加载到的已存 Key
-  const panelKey = apiKey.trim() || revealedKey || ''
-
-  const copyKey = async () => {
-    try {
-      await navigator.clipboard.writeText(panelKey)
-      toast.success(t('common.copySuccess'))
-    } catch {
-      toast.error(t('accounts.dialog.clipboardDenied'))
-    }
-  }
-
-  // 点眼睛查看 Key 时右侧栏同步滑出；收起眼睛时若停在 Key 面板则一并收起
+  // 点眼睛查看 Key 时右侧栏同步滑出；收起眼睛时若停在 Key 面板则一并收起。
+  // 编辑模式首次点开时向本机接口取已保存的全部 Key 并回填输入框（此后可编辑）。
   const toggleKey = () => {
     const next = !showKey
     setShowKey(next)
     if (next) {
       setPanel('key')
-      // 编辑模式：首次点开时向本机接口取 CPA 中保存的完整 Key
-      if (isEdit && account && revealedKey === null) {
+      if (isEdit && account && revealedKeys === null) {
         api
-          .get<{ apiKey: string }>(`/api/accounts/${encodeKey(account.key)}/reveal-key`)
-          .then((r) => setRevealedKey(r.apiKey ?? ''))
-          .catch(() => setRevealedKey(''))
+          .get<{ apiKeys: string[] }>(`/api/accounts/${encodeKey(account.key)}/reveal-key`)
+          .then((r) => {
+            const keys = r.apiKeys ?? []
+            setRevealedKeys(keys)
+            setKeysText(keys.join('\n'))
+          })
+          .catch(() => setRevealedKeys([]))
       }
     } else {
       setPanel((p) => (p === 'key' ? null : p))
@@ -279,7 +304,6 @@ export function AccountActionDialog({
             {/* 字段区 */}
             <div className="min-h-0 flex-1 overflow-y-auto md:pr-1">
               <div className="grid gap-x-6 gap-y-4 md:grid-cols-2">
-
           {isCompat && (
             <div className="space-y-1.5">
               <Label>
@@ -291,7 +315,7 @@ export function AccountActionDialog({
             </div>
           )}
 
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 md:col-span-2">
             <div className="flex items-center justify-between">
               <Label>
                 {t('accounts.dialog.apiKey')}
@@ -307,24 +331,28 @@ export function AccountActionDialog({
               </button>
             </div>
             <div className="relative">
-              <Input
-                type={showKey ? 'text' : 'password'}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={isEdit ? t('accounts.dialog.apiKeyEditHint') : 'sk-...'}
-                className="pr-9 font-mono"
-                autoComplete="new-password"
+              <Textarea
+                value={isEdit && !showKey ? maskedKeys : keysText}
+                onChange={(e) => setKeysText(e.target.value)}
+                readOnly={isEdit && !showKey}
+                rows={isCompat ? 3 : 2}
+                placeholder={isEdit ? t('accounts.dialog.keysRevealHint') : t('accounts.dialog.keysPlaceholder')}
+                className={cn('min-h-0 resize-y font-mono text-xs', isEdit && !showKey && 'text-muted-foreground')}
+                autoComplete="off"
                 data-form-type="other"
+                spellCheck={false}
               />
               <button
                 type="button"
-                className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
+                className="absolute right-2 top-2 cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
                 onClick={toggleKey}
               >
                 {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
               </button>
             </div>
-            {isEdit && <p className="text-xs text-muted-foreground">{t('accounts.dialog.apiKeyEditHint')}</p>}
+            <p className="text-xs text-muted-foreground">
+              {isEdit ? t('accounts.dialog.apiKeyEditHint') : t('accounts.dialog.keysHint')}
+            </p>
           </div>
 
           <div className="space-y-1.5">
@@ -421,23 +449,48 @@ export function AccountActionDialog({
               )}
             >
               <div className="mb-3 flex shrink-0 items-center justify-between">
-                <h3 className="text-sm font-semibold">{t('accounts.dialog.keyPanelTitle')}</h3>
+                <h3 className="text-sm font-semibold">
+                  {t('accounts.dialog.keyPanelTitle')}
+                  {panelKeys.length > 1 && <span className="ml-1 font-normal text-muted-foreground">· {panelKeys.length}</span>}
+                </h3>
                 <Button type="button" variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setPanel(null)}>
                   <ChevronLeft className="size-4" />
                 </Button>
               </div>
-              {panelKey ? (
+              {panelKeys.length ? (
                 <>
-                  <p className="shrink-0 rounded-lg border bg-muted/30 p-3 font-mono text-xs break-all">{panelKey}</p>
-                  <Button type="button" variant="outline" size="sm" className="mt-2 h-7 w-fit shrink-0" onClick={copyKey}>
-                    <Copy className="size-3" />
-                    {t('common.copy')}
-                  </Button>
+                  <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
+                    {panelKeys.map((k) => (
+                      <div key={k} className="flex items-start gap-1.5 rounded-lg border bg-muted/30 px-2 py-1.5">
+                        <span className="min-w-0 flex-1 break-all font-mono text-xs">{k}</span>
+                        <button
+                          type="button"
+                          className="shrink-0 cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
+                          onClick={() => copyText(k)}
+                          title={t('common.copy')}
+                        >
+                          <Copy className="size-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  {panelKeys.length > 1 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="mt-2 h-7 w-fit shrink-0"
+                      onClick={() => copyText(panelKeys.join('\n'))}
+                    >
+                      <Copy className="size-3" />
+                      {t('accounts.dialog.copyAll')}
+                    </Button>
+                  )}
                 </>
               ) : isEdit ? (
                 // 编辑：完整 Key 拉取中显示加载态，取不到时兜底展示掩码
                 <p className="rounded-lg border border-dashed p-3 font-mono text-xs text-muted-foreground">
-                  {revealedKey === null ? t('common.loading') : account?.apiKeyMasked || '—'}
+                  {revealedKeys === null ? t('common.loading') : maskedKeys || '—'}
                 </p>
               ) : (
                 <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">

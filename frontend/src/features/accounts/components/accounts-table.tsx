@@ -88,7 +88,23 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
                 )}
               </TableCell>
               <TableCell className="font-mono text-xs text-muted-foreground">
-                {account.kind === 'oauth' ? <span className="text-muted-foreground/60">—</span> : account.apiKeyMasked}
+                {account.kind === 'oauth' ? (
+                  <span className="text-muted-foreground/60">—</span>
+                ) : (
+                  <span>
+                    {account.apiKeyMasked}
+                    {(account.keyCount ?? 1) > 1 && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="ml-1 cursor-default rounded bg-muted/60 px-1 text-[10px]">
+                            +{(account.keyCount ?? 1) - 1}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>{t('accounts.moreKeys', { count: account.keyCount ?? 1 })}</TooltipContent>
+                      </Tooltip>
+                    )}
+                  </span>
+                )}
               </TableCell>
               <TableCell>
                 {account.kind === 'oauth' ? (

@@ -6,10 +6,12 @@ export type ReviewStatus = 'pending' | 'approved' | 'rejected'
 
 export interface Account {
   key: string
-  kind: AccountKind
+  kind: 'key' | 'oauth'
   type: string
   name: string
   apiKeyMasked?: string
+  /** 账号内 Key 总数（OpenAI 兼容多 Key 时 > 1，表格显示 +N）。 */
+  keyCount?: number
   baseUrl?: string
   status: AccountStatus
   disabled: boolean
@@ -36,6 +38,8 @@ export interface AccountDetail {
 export interface AccountInput {
   type: string
   apiKey?: string
+  /** 多 Key：兼容型写入同一条目由 CPA 轮询；Codex 等类型每个 Key 创建一个账号。 */
+  apiKeys?: string[]
   baseUrl?: string
   name?: string
   models?: string[]

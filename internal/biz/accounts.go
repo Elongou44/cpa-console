@@ -53,6 +53,7 @@ type Account struct {
 	Type          string `json:"type"`
 	Name          string `json:"name"`
 	APIKeyMasked  string `json:"apiKeyMasked,omitempty"`
+	KeyCount      int    `json:"keyCount"` // 账号内 Key 总数（openai-compatibility 多 Key 时 > 1）
 	BaseURL       string `json:"baseUrl,omitempty"`
 	Status        string `json:"status"` // enabled | disabled | error
 	Disabled      bool   `json:"disabled"`
@@ -74,7 +75,8 @@ type Account struct {
 // AccountInput 创建/编辑账号的输入。
 type AccountInput struct {
 	Type     string   `json:"type"`
-	APIKey   string   `json:"apiKey"`
+	APIKey   string   `json:"apiKey"`   // 单 Key 输入（兼容旧前端）
+	APIKeys  []string `json:"apiKeys"`  // 多 Key 输入：兼容型写入同一条目轮询，其余类型每个 Key 一个条目
 	BaseURL  string   `json:"baseUrl"`
 	Name     string   `json:"name"`
 	Models   []string `json:"models"`
@@ -257,6 +259,78 @@ func compatEntryAPIKey(entry map[string]any) string {
 	return k
 }
 
+// compatEntryAPIKeys 提取条目的全部 API Key（兼容 api-key-entries 数组与单个 api-key 字段两种结构）。
+func compatEntryAPIKeys(entry map[string]any) []string {
+	var out []string
+	if arr, ok := entry["api-key-entries"].([]any); ok {
+		for _, it := range arr {
+			if m, ok := it.(map[string]any); ok {
+				if k, _ := cpa.GetStr(m, "api-key", "apiKey", "api_key"); k != "" {
+					out = append(out, k)
+				}
+			}
+		}
+	}
+	if len(out) == 0 {
+		if k, _ := cpa.GetStr(entry, "api-key", "apiKey", "api_key"); k != "" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// normalizeKeys 合并输入的 Key 列表：去空白、去重、保序；列表为空时回落到单 Key 字段。
+func normalizeKeys(list []string, primary string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(list)+1)
+	add := func(k string) {
+		if k = strings.TrimSpace(k); k == "" || seen[k] {
+			return
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	for _, k := range list {
+		add(k)
+	}
+	if len(out) == 0 {
+		add(primary)
+	}
+	return out
+}
+
+// setCompatKeys 把 Key 列表写回 openai-compatibility 条目的 api-key-entries：
+// 数量不变或扩容时原位更新，保留逐 Key 自定义字段（weight / proxy-url）；缩容截断尾部。
+func setCompatKeys(entry map[string]any, keys []string) {
+	arr, _ := entry["api-key-entries"].([]any)
+	if len(arr) == 0 {
+		// 旧的顶层 api-key 结构：迁移为数组，避免丢失原 Key
+		if old, _ := cpa.GetStr(entry, "api-key", "apiKey", "api_key"); old != "" {
+			arr = []any{map[string]any{"api-key": old}}
+		} else {
+			arr = []any{}
+		}
+	}
+	for i := 0; i < len(arr) && i < len(keys); i++ {
+		m, _ := arr[i].(map[string]any)
+		if m == nil {
+			m = map[string]any{}
+		}
+		m["api-key"] = keys[i]
+		arr[i] = m
+	}
+	if len(keys) > len(arr) {
+		for _, k := range keys[len(arr):] {
+			arr = append(arr, map[string]any{"api-key": k})
+		}
+	}
+	if len(keys) < len(arr) {
+		arr = arr[:len(keys)]
+	}
+	entry["api-key-entries"] = arr
+	delete(entry, "api-key")
+}
+
 func keyAccountFrom(def collectionDef, entry map[string]any) Account {
 	base, _ := cpa.GetStr(entry, "base-url", "baseUrl", "base_url")
 	name, _ := cpa.GetStr(entry, "name")
@@ -267,17 +341,14 @@ func keyAccountFrom(def collectionDef, entry map[string]any) Account {
 	case base != "":
 		a.Name = hostOf(base)
 	}
-	// 提取 API Key：openai-compatibility 为 api-key-entries 数组，其余为单个 api-key 字段。
+	// 提取 API Key：openai-compatibility 为 api-key-entries 数组（多 Key），其余为单个 api-key 字段。
+	keys := compatEntryAPIKeys(entry)
 	firstKey := ""
-	if arr, ok := entry["api-key-entries"].([]any); ok && len(arr) > 0 {
-		if m, ok := arr[0].(map[string]any); ok {
-			firstKey, _ = cpa.GetStr(m, "api-key", "apiKey", "api_key")
-		}
-	}
-	if firstKey == "" {
-		firstKey, _ = cpa.GetStr(entry, "api-key", "apiKey", "api_key")
+	if len(keys) > 0 {
+		firstKey = keys[0]
 	}
 	a.APIKeyMasked = maskKey(firstKey)
+	a.KeyCount = len(keys)
 	if a.Name == "" {
 		a.Name = a.APIKeyMasked
 	}
@@ -403,8 +474,12 @@ func (b *Biz) ListAccounts(ctx context.Context, q, status, typ string) ([]Accoun
 	return out, nil
 }
 
-func buildEntry(def collectionDef, in AccountInput) map[string]any {
-	e := map[string]any{"api-key": strings.TrimSpace(in.APIKey)}
+func buildEntry(def collectionDef, in AccountInput, keys []string) map[string]any {
+	first := ""
+	if len(keys) > 0 {
+		first = keys[0]
+	}
+	e := map[string]any{"api-key": first}
 	if in.BaseURL != "" {
 		e["base-url"] = strings.TrimSpace(in.BaseURL)
 	}
@@ -412,9 +487,14 @@ func buildEntry(def collectionDef, in AccountInput) map[string]any {
 		e["priority"] = *in.Priority
 	}
 	if def.Type == "openai-compatibility" {
-		// CPA 要求该结构使用 api-key-entries 数组；手动添加的模型直接放行并写入路由清单。
+		// CPA 要求该结构使用 api-key-entries 数组（多 Key 由 CPA 轮询使用）；
+		// 手动添加的模型直接放行并写入路由清单。
 		e["name"] = strings.TrimSpace(in.Name)
-		e["api-key-entries"] = []any{map[string]any{"api-key": strings.TrimSpace(in.APIKey)}}
+		arr := make([]any, 0, len(keys))
+		for _, k := range keys {
+			arr = append(arr, map[string]any{"api-key": k})
+		}
+		e["api-key-entries"] = arr
 		delete(e, "api-key")
 		models := make([]any, 0, len(in.Models))
 		for _, m := range in.Models {
@@ -429,12 +509,15 @@ func buildEntry(def collectionDef, in AccountInput) map[string]any {
 }
 
 // CreateAccount 新增 Key 型账号并写入 CPA。
+// 多 Key 语义：openai-compatibility 全部写入同一条目的 api-key-entries（CPA 轮询使用）；
+// 其余类型一个条目一个 Key，多 Key 会创建多个条目（共享分组/标签/UA 设置）。
 func (b *Biz) CreateAccount(ctx context.Context, in AccountInput) (Account, error) {
 	def, ok := defByType(in.Type)
 	if !ok {
 		return Account{}, fmt.Errorf("不支持的账号类型: %s", in.Type)
 	}
-	if strings.TrimSpace(in.APIKey) == "" {
+	keys := normalizeKeys(in.APIKeys, in.APIKey)
+	if len(keys) == 0 {
 		return Account{}, fmt.Errorf("API Key 不能为空")
 	}
 	if in.Type == "openai-compatibility" && strings.TrimSpace(in.Name) == "" {
@@ -454,42 +537,74 @@ func (b *Biz) CreateAccount(ctx context.Context, in AccountInput) (Account, erro
 	if err != nil {
 		return Account{}, err
 	}
-	newKey := strings.TrimSpace(in.APIKey)
+	// 重复检查覆盖集合内全部条目的全部 Key（含兼容型多 Key 数组）。
+	existing := map[string]bool{}
 	for _, it := range items {
-		if k, _ := cpa.GetStr(it, "api-key", "apiKey", "api_key"); k == newKey {
-			return Account{}, fmt.Errorf("该 API Key 已存在")
+		for _, k := range compatEntryAPIKeys(it) {
+			existing[k] = true
 		}
-		if def.Type == "openai-compatibility" {
+	}
+	for _, k := range keys {
+		if existing[k] {
+			return Account{}, fmt.Errorf("该 API Key 已存在: %s", maskKey(k))
+		}
+	}
+	if def.Type == "openai-compatibility" {
+		for _, it := range items {
 			if n, _ := cpa.GetStr(it, "name"); n == in.Name {
 				return Account{}, fmt.Errorf("同名账号已存在: %s", in.Name)
 			}
 		}
 	}
-	entry := buildEntry(def, in)
-	items = append(items, entry)
-	if err := c.PutKeyItems(ctx, def.Collection, items); err != nil {
-		return Account{}, err
-	}
-	acct := keyAccountFrom(def, entry)
-	// 手动添加的模型不需要审批：直接以放行状态落库（CPA 路由清单已在 buildEntry 写入）。
-	if def.Type == "openai-compatibility" && len(in.Models) > 0 {
-		rows := make([]store.AccountModel, 0, len(in.Models))
-		for _, m := range in.Models {
-			if m = strings.TrimSpace(m); m != "" {
-				obj := compatModelObj(m)
-				rows = append(rows, store.AccountModel{
-					AccountKey: acct.Key, AccountType: acct.Type, AccountName: acct.Name,
-					Model: m, Alias: aliasOf(obj), Payload: jsonMarshalString(obj),
-				})
-			}
+
+	var acct Account
+	if def.Type == "openai-compatibility" {
+		entry := buildEntry(def, in, keys)
+		items = append(items, entry)
+		if err := c.PutKeyItems(ctx, def.Collection, items); err != nil {
+			return Account{}, err
 		}
-		b.insertDiscoveryRecords(rows, func(store.AccountModel) string { return StatusApproved })
+		acct = keyAccountFrom(def, entry)
+		// 手动添加的模型不需要审批：直接以放行状态落库（CPA 路由清单已在 buildEntry 写入）。
+		if len(in.Models) > 0 {
+			rows := make([]store.AccountModel, 0, len(in.Models))
+			for _, m := range in.Models {
+				if m = strings.TrimSpace(m); m != "" {
+					obj := compatModelObj(m)
+					rows = append(rows, store.AccountModel{
+						AccountKey: acct.Key, AccountType: acct.Type, AccountName: acct.Name,
+						Model: m, Alias: aliasOf(obj), Payload: jsonMarshalString(obj),
+					})
+				}
+			}
+			b.insertDiscoveryRecords(rows, func(store.AccountModel) string { return StatusApproved })
+		}
+	} else {
+		var entries []map[string]any
+		for _, k := range keys {
+			entries = append(entries, buildEntry(def, in, []string{k}))
+		}
+		items = append(items, entries...)
+		if err := c.PutKeyItems(ctx, def.Collection, items); err != nil {
+			return Account{}, err
+		}
+		acct = keyAccountFrom(def, entries[0])
 	}
-	_ = b.Store.SetAccountGroup(acct.Key, strings.TrimSpace(in.Group))
-	_ = b.Store.SetAccountTags(acct.Key, normalizeTags(in.Tags))
-	_ = b.Store.SetAccountUserAgent(acct.Key, strings.TrimSpace(in.UA))
-	// 新账号默认不参与周期自动同步（手动「立即同步」不受影响），确认可用后再在列表开启。
-	_ = b.Store.SetAutoSync(acct.Key, false)
+	// 分组/标签/UA/自动同步设置应用到本次创建的全部条目。
+	createdKeys := []string{acct.Key}
+	if def.Type != "openai-compatibility" && len(keys) > 1 {
+		createdKeys = createdKeys[:0]
+		for _, entry := range items[len(items)-len(keys):] {
+			createdKeys = append(createdKeys, keyAccountFrom(def, entry).Key)
+		}
+	}
+	for _, k := range createdKeys {
+		_ = b.Store.SetAccountGroup(k, strings.TrimSpace(in.Group))
+		_ = b.Store.SetAccountTags(k, normalizeTags(in.Tags))
+		_ = b.Store.SetAccountUserAgent(k, strings.TrimSpace(in.UA))
+		// 新账号默认不参与周期自动同步（手动「立即同步」不受影响），确认可用后再在列表开启。
+		_ = b.Store.SetAutoSync(k, false)
+	}
 	return acct, nil
 }
 
@@ -555,16 +670,15 @@ func (b *Biz) UpdateAccount(ctx context.Context, key string, in AccountInput) (A
 			return Account{}, err
 		}
 	}
-	if strings.TrimSpace(in.APIKey) != "" {
-		newKey := strings.TrimSpace(in.APIKey)
-		if arr, ok := entry["api-key-entries"].([]any); ok && len(arr) > 0 {
-			if m, ok := arr[0].(map[string]any); ok {
-				m["api-key"] = newKey
-				arr[0] = m
-				entry["api-key-entries"] = arr
-			}
+	if keys := normalizeKeys(in.APIKeys, in.APIKey); len(keys) > 0 {
+		if def.Type == "openai-compatibility" {
+			// 多 Key 原位更新，保留逐 Key 自定义字段；数量变化时扩容/截断。
+			setCompatKeys(entry, keys)
 		} else {
-			entry["api-key"] = newKey
+			if len(keys) > 1 {
+				return Account{}, fmt.Errorf("该类型一个账号仅支持一个 Key，多 Key 请分别添加账号")
+			}
+			entry["api-key"] = keys[0]
 		}
 	}
 	if strings.TrimSpace(in.BaseURL) != "" {
@@ -790,30 +904,30 @@ func (b *Biz) GetAccount(ctx context.Context, key string) (Account, []string, er
 	return Account{}, nil, fmt.Errorf("账号不存在")
 }
 
-// RevealAccountKey 返回 Key 型账号的完整 API Key（编辑弹窗「查看 Key」面板使用；仅本机管理接口）。
-func (b *Biz) RevealAccountKey(ctx context.Context, key string) (string, error) {
+// RevealAccountKeys 返回账号保存的全部 API Key（编辑弹窗「查看 Key」面板使用；仅本机管理接口）。
+func (b *Biz) RevealAccountKeys(ctx context.Context, key string) ([]string, error) {
 	c, err := b.Client()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	typ, _, err := splitKey(key)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	def, ok := defByType(typ)
 	if !ok {
-		return "", fmt.Errorf("不支持的账号类型: %s", typ)
+		return nil, fmt.Errorf("不支持的账号类型: %s", typ)
 	}
 	items, err := c.GetKeyItems(ctx, def.Collection)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	for _, entry := range items {
 		if keyAccountFrom(def, entry).Key == key {
-			return compatEntryAPIKey(entry), nil
+			return compatEntryAPIKeys(entry), nil
 		}
 	}
-	return "", fmt.Errorf("账号不存在")
+	return nil, fmt.Errorf("账号不存在")
 }
 
 // SetAuthFileStatus 启用/禁用 OAuth 凭据。
