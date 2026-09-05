@@ -170,6 +170,20 @@ func (h *handler) getAccount(c *gin.Context) {
 	ok(c, gin.H{"account": acct, "models": models})
 }
 
+// revealAccountKey 返回 Key 型账号的完整 API Key（编辑弹窗「查看 Key」面板使用）。
+func (h *handler) revealAccountKey(c *gin.Context) {
+	key, valid := decodeKey(c)
+	if !valid {
+		return
+	}
+	apiKey, err := h.b.RevealAccountKey(c.Request.Context(), key)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, gin.H{"apiKey": apiKey})
+}
+
 // accountModelsDetail 返回某账号在 CPA 中已加入的全部模型及其 alias 映射。
 func (h *handler) accountModelsDetail(c *gin.Context) {
 	key, valid := decodeKey(c)

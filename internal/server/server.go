@@ -29,6 +29,7 @@ func New(b *biz.Biz, dist fs.FS) *gin.Engine {
 		api.POST("/settings/test", h.testSettings)
 		api.GET("/accounts", h.listAccounts)
 		api.GET("/accounts/:key", h.getAccount)
+		api.GET("/accounts/:key/reveal-key", h.revealAccountKey)
 		api.GET("/accounts/:key/models-detail", h.accountModelsDetail)
 		api.POST("/accounts", h.createAccount)
 		api.PUT("/accounts/:key", h.updateAccount)

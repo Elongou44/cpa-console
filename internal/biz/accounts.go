@@ -790,6 +790,32 @@ func (b *Biz) GetAccount(ctx context.Context, key string) (Account, []string, er
 	return Account{}, nil, fmt.Errorf("账号不存在")
 }
 
+// RevealAccountKey 返回 Key 型账号的完整 API Key（编辑弹窗「查看 Key」面板使用；仅本机管理接口）。
+func (b *Biz) RevealAccountKey(ctx context.Context, key string) (string, error) {
+	c, err := b.Client()
+	if err != nil {
+		return "", err
+	}
+	typ, _, err := splitKey(key)
+	if err != nil {
+		return "", err
+	}
+	def, ok := defByType(typ)
+	if !ok {
+		return "", fmt.Errorf("不支持的账号类型: %s", typ)
+	}
+	items, err := c.GetKeyItems(ctx, def.Collection)
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range items {
+		if keyAccountFrom(def, entry).Key == key {
+			return compatEntryAPIKey(entry), nil
+		}
+	}
+	return "", fmt.Errorf("账号不存在")
+}
+
 // SetAuthFileStatus 启用/禁用 OAuth 凭据。
 func (b *Biz) SetAuthFileStatus(ctx context.Context, name string, disabled bool) error {
 	c, err := b.Client()

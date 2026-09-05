@@ -6,6 +6,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { t } from '@/lib/i18n'
+import { api } from '@/lib/api'
+import { encodeKey } from '@/lib/utils'
 import type { Account, AccountInput } from '@/lib/types'
 import { useAccountDetail, useCreateAccount, useFetchUpstreamModels, useUpdateAccount } from '../data/hooks'
 import { ModelSuggestionsPanel, ModelTagInput } from './model-tag-input'
@@ -90,7 +92,11 @@ export function AccountActionDialog({
   const [showKey, setShowKey] = useState(false)
   // 右侧栏当前展示内容：Key 面板 / 候选模型面板 / 收起；打开时弹窗整体加宽
   const [panel, setPanel] = useState<'key' | 'models' | null>(null)
+  // 编辑时懒加载的完整 Key（点眼睛才向本机接口取）；null 表示尚未获取
+  const [revealedKey, setRevealedKey] = useState<string | null>(null)
 
+  // 依赖用 account.key 而非 account 对象：列表 20s 轮询会生成新对象引用，
+  // 若依赖对象本身，弹窗打开期间轮询到数据变化就会把正在输入的 Key 清空。
   useEffect(() => {
     if (!open) return
     setType(account?.type ?? 'openai-compatibility')
@@ -105,7 +111,8 @@ export function AccountActionDialog({
     setSuggestions([])
     setShowKey(false)
     setPanel(null)
-  }, [open, account])
+    setRevealedKey(null)
+  }, [open, account?.key])
 
   // 编辑时回填当前模型列表。
   useEffect(() => {
@@ -190,9 +197,12 @@ export function AccountActionDialog({
 
   const isCompat = type === 'openai-compatibility'
 
+  // 面板展示的 Key：优先用户新输入的，其次编辑时懒加载到的已存 Key
+  const panelKey = apiKey.trim() || revealedKey || ''
+
   const copyKey = async () => {
     try {
-      await navigator.clipboard.writeText(apiKey)
+      await navigator.clipboard.writeText(panelKey)
       toast.success(t('common.copySuccess'))
     } catch {
       toast.error(t('accounts.dialog.clipboardDenied'))
@@ -203,8 +213,18 @@ export function AccountActionDialog({
   const toggleKey = () => {
     const next = !showKey
     setShowKey(next)
-    if (next) setPanel('key')
-    else setPanel((p) => (p === 'key' ? null : p))
+    if (next) {
+      setPanel('key')
+      // 编辑模式：首次点开时向本机接口取 CPA 中保存的完整 Key
+      if (isEdit && account && revealedKey === null) {
+        api
+          .get<{ apiKey: string }>(`/api/accounts/${encodeKey(account.key)}/reveal-key`)
+          .then((r) => setRevealedKey(r.apiKey ?? ''))
+          .catch(() => setRevealedKey(''))
+      }
+    } else {
+      setPanel((p) => (p === 'key' ? null : p))
+    }
   }
 
   const fetchAndShowModels = () => {
@@ -293,7 +313,8 @@ export function AccountActionDialog({
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder={isEdit ? t('accounts.dialog.apiKeyEditHint') : 'sk-...'}
                 className="pr-9 font-mono"
-                autoComplete="off"
+                autoComplete="new-password"
+                data-form-type="other"
               />
               <button
                 type="button"
@@ -405,17 +426,22 @@ export function AccountActionDialog({
                   <ChevronLeft className="size-4" />
                 </Button>
               </div>
-              {apiKey.trim() ? (
+              {panelKey ? (
                 <>
-                  <p className="shrink-0 rounded-lg border bg-muted/30 p-3 font-mono text-xs break-all">{apiKey}</p>
+                  <p className="shrink-0 rounded-lg border bg-muted/30 p-3 font-mono text-xs break-all">{panelKey}</p>
                   <Button type="button" variant="outline" size="sm" className="mt-2 h-7 w-fit shrink-0" onClick={copyKey}>
                     <Copy className="size-3" />
                     {t('common.copy')}
                   </Button>
                 </>
+              ) : isEdit ? (
+                // 编辑：完整 Key 拉取中显示加载态，取不到时兜底展示掩码
+                <p className="rounded-lg border border-dashed p-3 font-mono text-xs text-muted-foreground">
+                  {revealedKey === null ? t('common.loading') : account?.apiKeyMasked || '—'}
+                </p>
               ) : (
                 <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-                  {isEdit ? t('accounts.dialog.apiKeyEditHint') : t('accounts.dialog.keyPanelEmpty')}
+                  {t('accounts.dialog.keyPanelEmpty')}
                 </p>
               )}
             </div>
