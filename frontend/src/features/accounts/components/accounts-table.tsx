@@ -40,7 +40,7 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
         <TableBody>
           {accounts.map((account) => (
             <TableRow key={account.key}>
-              <TableCell className="max-w-56 pl-5">
+              <TableCell className="max-w-64 pl-5">
                 <div className="flex items-center gap-1.5">
                   <span className="truncate font-medium">{account.name}</span>
                   {account.group && (
@@ -48,7 +48,17 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
                       {account.group}
                     </Badge>
                   )}
-                  {account.tags?.map((tag) => (
+                  {(account.tags?.length ?? 0) > 2 && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Badge variant="outline" className="h-4 shrink-0 px-1.5 text-[10px] font-normal text-muted-foreground">
+                          +{(account.tags?.length ?? 0) - 2}
+                        </Badge>
+                      </TooltipTrigger>
+                      <TooltipContent>{account.tags?.slice(2).join('、')}</TooltipContent>
+                    </Tooltip>
+                  )}
+                  {(account.tags ?? []).slice(0, 2).map((tag) => (
                     <Badge key={tag} variant="outline" className="h-4 shrink-0 px-1.5 text-[10px] font-normal text-muted-foreground">
                       {tag}
                     </Badge>

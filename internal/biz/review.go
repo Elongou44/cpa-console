@@ -213,14 +213,14 @@ func (b *Biz) enforce(ctx context.Context, c *cpa.Client, snap *snapshot, status
 	var errs []string
 	writes := 0
 
-	// Key 型账号：openai-compatibility 重写 models 清单（未放行的移除、放行的还原）；
-	// 其余类型写条目 excluded-models 字段（PUT 整体替换，先在内存中改好再统一提交）。
+	// Key 型账号：支持 models 路由清单的类型（openai-compatibility / codex）重写 models 清单
+	// （未放行的移除、放行的还原）；其余类型写条目 excluded-models 字段（PUT 整体替换，先在内存中改好再统一提交）。
 	for _, def := range keyCollections {
 		items := snap.keyItems[def.Collection]
 		if items == nil {
 			continue
 		}
-		if def.Type == "openai-compatibility" {
+		if entrySupportsModels(def) {
 			changed := false
 			for i, entry := range items {
 				acct := keyAccountFrom(def, entry)
@@ -317,6 +317,11 @@ func (b *Biz) enforceCompatEntry(byAccount map[string]map[string]string, acct Ac
 	kept := make([]any, 0, len(arr))
 	seen := map[string]bool{}
 	changed := false
+	// codex 由屏蔽清单模式切换到路由清单模式时，清掉历史 excluded-models，避免双重过滤。
+	if _, has := entry["excluded-models"]; has {
+		delete(entry, "excluded-models")
+		changed = true
+	}
 	for _, it := range arr {
 		name := ""
 		if m, ok := it.(map[string]any); ok {

@@ -217,23 +217,51 @@ type modelEntry struct {
 
 // keyEntryModels 计算单个 Key 型账号的可用模型：
 // openai-compatibility 取条目内 models 数组（即 CPA 的路由清单）；其余类型查 model-definitions 静态目录。
-func keyEntryModels(ctx context.Context, c *cpa.Client, def collectionDef, entry map[string]any) []modelEntry {
-	if def.Type == "openai-compatibility" {
-		var out []modelEntry
-		arr, ok := entry["models"].([]any)
-		if !ok {
-			return nil
+// entrySupportsModels 该类型条目是否支持 models 路由清单（可手动添加/点选模型并写入 CPA）。
+func entrySupportsModels(def collectionDef) bool {
+	return def.Type == "openai-compatibility" || def.Type == "codex"
+}
+
+// parseEntryModels 解析条目内 models 数组（字符串或对象两种形态），标记为显式配置（发现即放行）。
+func parseEntryModels(entry map[string]any) []modelEntry {
+	var out []modelEntry
+	arr, ok := entry["models"].([]any)
+	if !ok {
+		return out
+	}
+	for _, it := range arr {
+		switch m := it.(type) {
+		case string:
+			out = append(out, modelEntry{name: m, fromConfig: true, payload: jsonMarshalString(map[string]any{"name": m})})
+		case map[string]any:
+			name, _ := cpa.GetStr(m, "name", "id")
+			if name != "" {
+				alias, _ := cpa.GetStr(m, "alias")
+				out = append(out, modelEntry{name: name, alias: alias, fromConfig: true, payload: jsonMarshalString(m)})
+			}
 		}
-		for _, it := range arr {
-			switch m := it.(type) {
-			case string:
-				out = append(out, modelEntry{name: m, fromConfig: true, payload: jsonMarshalString(map[string]any{"name": m})})
-			case map[string]any:
-				name, _ := cpa.GetStr(m, "name", "id")
-				if name != "" {
-					alias, _ := cpa.GetStr(m, "alias")
-					out = append(out, modelEntry{name: name, alias: alias, fromConfig: true, payload: jsonMarshalString(m)})
-				}
+	}
+	return out
+}
+
+func keyEntryModels(ctx context.Context, c *cpa.Client, def collectionDef, entry map[string]any) []modelEntry {
+	if entrySupportsModels(def) {
+		out := parseEntryModels(entry)
+		if def.Type != "codex" || def.Channel == "" {
+			return out
+		}
+		// codex：条目路由清单之外，model-definitions 静态目录中的模型同样参与发现（进入待审批）。
+		names, err := c.GetModelDefinitions(ctx, def.Channel)
+		if err != nil {
+			return out
+		}
+		seen := map[string]bool{}
+		for _, m := range out {
+			seen[m.name] = true
+		}
+		for _, n := range names {
+			if !seen[n] {
+				out = append(out, modelEntry{name: n})
 			}
 		}
 		return out
@@ -495,8 +523,7 @@ func buildEntry(def collectionDef, in AccountInput, keys []string) map[string]an
 		e["priority"] = *in.Priority
 	}
 	if def.Type == "openai-compatibility" {
-		// CPA 要求该结构使用 api-key-entries 数组（多 Key 由 CPA 轮询使用）；
-		// 手动添加的模型直接放行并写入路由清单。
+		// CPA 要求该结构使用 api-key-entries 数组（多 Key 由 CPA 轮询使用）。
 		e["name"] = strings.TrimSpace(in.Name)
 		arr := make([]any, 0, len(keys))
 		for _, k := range keys {
@@ -504,10 +531,13 @@ func buildEntry(def collectionDef, in AccountInput, keys []string) map[string]an
 		}
 		e["api-key-entries"] = arr
 		delete(e, "api-key")
+	}
+	if entrySupportsModels(def) {
+		// 手动添加的模型直接放行并写入路由清单；
+		// 新加入的模型自动生成标准 alias（无需映射时省略 alias 字段）。
 		models := make([]any, 0, len(in.Models))
 		for _, m := range in.Models {
 			if m = strings.TrimSpace(m); m != "" {
-				// 新加入的模型自动生成标准 alias（无需映射时省略 alias 字段）。
 				models = append(models, compatModelObj(m))
 			}
 		}
@@ -571,28 +601,14 @@ func (b *Biz) CreateAccount(ctx context.Context, in AccountInput) (Account, erro
 		}
 	}
 
-	var acct Account
+	var created []Account
 	if def.Type == "openai-compatibility" {
 		entry := buildEntry(def, in, keys)
 		items = append(items, entry)
 		if err := c.PutKeyItems(ctx, def.Collection, items); err != nil {
 			return Account{}, err
 		}
-		acct = keyAccountFrom(def, entry)
-		// 手动添加的模型不需要审批：直接以放行状态落库（CPA 路由清单已在 buildEntry 写入）。
-		if len(in.Models) > 0 {
-			rows := make([]store.AccountModel, 0, len(in.Models))
-			for _, m := range in.Models {
-				if m = strings.TrimSpace(m); m != "" {
-					obj := compatModelObj(m)
-					rows = append(rows, store.AccountModel{
-						AccountKey: acct.Key, AccountType: acct.Type, AccountName: acct.Name,
-						Model: m, Alias: aliasOf(obj), Payload: jsonMarshalString(obj),
-					})
-				}
-			}
-			b.insertDiscoveryRecords(rows, func(store.AccountModel) string { return StatusApproved })
-		}
+		created = append(created, keyAccountFrom(def, entry))
 	} else {
 		var entries []map[string]any
 		for _, k := range keys {
@@ -602,26 +618,38 @@ func (b *Biz) CreateAccount(ctx context.Context, in AccountInput) (Account, erro
 		if err := c.PutKeyItems(ctx, def.Collection, items); err != nil {
 			return Account{}, err
 		}
-		acct = keyAccountFrom(def, entries[0])
-	}
-	// 分组/标签/UA/自动同步设置应用到本次创建的全部条目。
-	createdKeys := []string{acct.Key}
-	if def.Type != "openai-compatibility" && len(keys) > 1 {
-		createdKeys = createdKeys[:0]
-		for _, entry := range items[len(items)-len(keys):] {
-			createdKeys = append(createdKeys, keyAccountFrom(def, entry).Key)
+		for _, e := range entries {
+			created = append(created, keyAccountFrom(def, e))
 		}
 	}
-	for _, k := range createdKeys {
-		_ = b.Store.SetAccountGroup(k, strings.TrimSpace(in.Group))
-		_ = b.Store.SetAccountTags(k, normalizeTags(in.Tags))
-		_ = b.Store.SetAccountUserAgent(k, strings.TrimSpace(in.UA))
+	acct := created[0]
+	// 手动添加的模型不需要审批：直接以放行状态落库（CPA 路由清单已在 buildEntry 写入）。
+	if entrySupportsModels(def) && len(in.Models) > 0 {
+		rows := make([]store.AccountModel, 0, len(in.Models)*len(created))
+		for _, a := range created {
+			for _, m := range in.Models {
+				if m = strings.TrimSpace(m); m != "" {
+					obj := compatModelObj(m)
+					rows = append(rows, store.AccountModel{
+						AccountKey: a.Key, AccountType: a.Type, AccountName: a.Name,
+						Model: m, Alias: aliasOf(obj), Payload: jsonMarshalString(obj),
+					})
+				}
+			}
+		}
+		b.insertDiscoveryRecords(rows, func(store.AccountModel) string { return StatusApproved })
+	}
+	// 分组/标签/UA/自动同步设置应用到本次创建的全部条目。
+	for _, a := range created {
+		_ = b.Store.SetAccountGroup(a.Key, strings.TrimSpace(in.Group))
+		_ = b.Store.SetAccountTags(a.Key, normalizeTags(in.Tags))
+		_ = b.Store.SetAccountUserAgent(a.Key, strings.TrimSpace(in.UA))
 		// 新账号默认不参与周期自动同步（手动「立即同步」不受影响），确认可用后再在列表开启。
-		_ = b.Store.SetAutoSync(k, false)
+		_ = b.Store.SetAutoSync(a.Key, false)
 	}
 	// 非 compat 类型 CPA 条目无 name 字段：首个条目把输入名称存为控制台显示名。
 	if def.Type != "openai-compatibility" && strings.TrimSpace(in.Name) != "" {
-		_ = b.Store.SetAccountDisplayName(createdKeys[0], strings.TrimSpace(in.Name))
+		_ = b.Store.SetAccountDisplayName(created[0].Key, strings.TrimSpace(in.Name))
 		acct.Name = strings.TrimSpace(in.Name)
 	}
 	return acct, nil
@@ -702,8 +730,8 @@ func (b *Biz) updateAccountLocked(ctx context.Context, key, typ string, in Accou
 		return Account{}, false, fmt.Errorf("账号不存在或标识已变更，请刷新后重试")
 	}
 	entry := items[idx]
-	// openai-compatibility：先做模型清单 diff（使用重命名前的身份）。
-	if def.Type == "openai-compatibility" && in.Models != nil {
+	// 支持 models 清单的类型：先做模型清单 diff（使用重命名前的身份）。
+	if entrySupportsModels(def) && in.Models != nil {
 		if err := b.updateCompatModels(def, key, entry, in.Models); err != nil {
 			return Account{}, false, err
 		}

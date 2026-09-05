@@ -52,6 +52,9 @@ function parseKeys(text: string): string[] {
   return [...new Set(text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean))]
 }
 
+/** 支持 models 路由清单的类型：模型可手动添加并写入 CPA 条目。 */
+const MODEL_EDITABLE_TYPES = new Set(['openai-compatibility', 'codex'])
+
 const KEY_TYPES = [
   { value: 'openai-compatibility', label: 'OpenAI 兼容' },
   { value: 'gemini', label: 'Gemini API' },
@@ -198,7 +201,7 @@ export function AccountActionDialog({
       name: name.trim() || undefined,
       apiKeys: keys.length ? keys : undefined,
       baseUrl: baseUrl.trim() || undefined,
-      models: type === 'openai-compatibility' ? models : undefined,
+      models: hasModels ? models : undefined,
       group: group.trim(),
       tags,
       priority: Math.max(0, Math.floor(Number(priority) || 0)),
@@ -229,6 +232,7 @@ export function AccountActionDialog({
   }
 
   const isCompat = type === 'openai-compatibility'
+  const hasModels = MODEL_EDITABLE_TYPES.has(type)
 
   // 点眼睛查看 Key 时右侧栏同步滑出；收起眼睛时若停在 Key 面板则一并收起。
   // 编辑模式首次点开时向本机接口取已保存的全部 Key 并回填输入框（此后可编辑）。
@@ -308,7 +312,7 @@ export function AccountActionDialog({
             {/* 字段区 */}
             <div className="min-h-0 flex-1 overflow-y-auto md:pr-1">
               <div className="grid gap-x-6 gap-y-4 md:grid-cols-2">
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 md:col-span-2">
             <Label>
               {t('accounts.dialog.name')}
               {isCompat && <span className="ml-1 text-destructive">*</span>}
@@ -430,7 +434,7 @@ export function AccountActionDialog({
                 {t('accounts.dialog.fetchModels')}
               </button>
             </div>
-            {isCompat ? (
+            {hasModels ? (
               <ModelTagInput value={models} onChange={setModels} />
             ) : (
               <p className="rounded-lg border border-dashed p-2.5 text-xs text-muted-foreground">
@@ -516,7 +520,7 @@ export function AccountActionDialog({
             >
               <ModelSuggestionsPanel
                 embedded
-                readOnly={!isCompat}
+                readOnly={!hasModels}
                 value={models}
                 onChange={setModels}
                 suggestions={suggestions}
