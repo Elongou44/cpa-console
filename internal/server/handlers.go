@@ -56,6 +56,8 @@ type settingsPayload struct {
 	DefaultUA       string  `json:"defaultUA"`
 	ConnAuto        bool    `json:"connAuto"`
 	ConnIntervalSec int     `json:"connIntervalSec"`
+	GuardAuto       bool    `json:"guardAuto"`
+	GuardThreshold  int     `json:"guardThreshold"`
 	ManagementKey   *string `json:"managementKey,omitempty"` // 仅写入用
 }
 
@@ -77,6 +79,10 @@ func (h *handler) settingsOut() (*settingsPayload, error) {
 	if v, err := strconv.Atoi(st["conn_interval_sec"]); err == nil && v >= 30 {
 		connInterval = v
 	}
+	guardThreshold := 3
+	if v, err := strconv.Atoi(st["guard_threshold"]); err == nil && v >= 2 {
+		guardThreshold = v
+	}
 	return &settingsPayload{
 		BaseURL:         st["base_url"],
 		HasKey:          st["management_key"] != "",
@@ -86,6 +92,8 @@ func (h *handler) settingsOut() (*settingsPayload, error) {
 		DefaultUA:       ua,
 		ConnAuto:        st["conn_auto"] != "false",
 		ConnIntervalSec: connInterval,
+		GuardAuto:       st["guard_auto"] == "true",
+		GuardThreshold:  guardThreshold,
 	}, nil
 }
 
@@ -111,6 +119,8 @@ func (h *handler) putSettings(c *gin.Context) {
 		"default_ua":        strings.TrimSpace(in.DefaultUA),
 		"conn_auto":         boolStr(in.ConnAuto),
 		"conn_interval_sec": strconv.Itoa(maxInt(in.ConnIntervalSec, 30)),
+		"guard_auto":        boolStr(in.GuardAuto),
+		"guard_threshold":   strconv.Itoa(maxInt(in.GuardThreshold, 2)),
 	}
 	if in.ManagementKey != nil { // 指针：未传表示不修改
 		kv["management_key"] = *in.ManagementKey
@@ -210,6 +220,26 @@ func (h *handler) checkConnectivity(c *gin.Context) {
 		return
 	}
 	ok(c, gin.H{"results": results})
+}
+
+// patchAccountDisabled 启用/停用 Key 型账号（写入 CPA 条目 disabled 字段）。
+func (h *handler) patchAccountDisabled(c *gin.Context) {
+	key, valid := decodeKey(c)
+	if !valid {
+		return
+	}
+	var in struct {
+		Disabled bool `json:"disabled"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		fail(c, err)
+		return
+	}
+	if err := h.b.SetKeyAccountDisabled(c.Request.Context(), key, in.Disabled); err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, gin.H{"updated": true})
 }
 
 // accountModelsDetail 返回某账号在 CPA 中已加入的全部模型及其 alias 映射。

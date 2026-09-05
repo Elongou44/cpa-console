@@ -18,6 +18,7 @@ export interface AccountRowActions {
   onToggle: (account: Account) => void
   onAutoSync: (account: Account) => void
   onCheckConn: (account: Account) => void
+  onToggleDisabled: (account: Account) => void
 }
 
 /** 账号表格。 */
@@ -137,6 +138,17 @@ export function AccountsTable({
                     />
                     <AccountStatusBadge status={account.status} />
                   </div>
+                ) : account.type === 'openai-compatibility' ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button type="button" className="cursor-pointer" onClick={() => actions.onToggleDisabled(account)}>
+                        <AccountStatusBadge status={account.status} />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {account.disabled ? t('accounts.clickEnable') : t('accounts.clickDisable')}
+                    </TooltipContent>
+                  </Tooltip>
                 ) : (
                   <AccountStatusBadge status={account.status} />
                 )}

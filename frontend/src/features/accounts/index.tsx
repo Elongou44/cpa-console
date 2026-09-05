@@ -19,7 +19,7 @@ import { PageBody, PageHeader } from '@/components/layout/page-header'
 import { t } from '@/lib/i18n'
 import type { Account } from '@/lib/types'
 import { useSyncNow } from '@/lib/sync'
-import { useAccounts, useCheckConnectivity, useDeleteAccount, useSetAutoSync, useToggleAuthFile } from './data/hooks'
+import { useAccounts, useCheckConnectivity, useDeleteAccount, useSetAutoSync, useToggleAuthFile, useToggleKeyDisabled } from './data/hooks'
 import { AccountsTypeTabs, type TypeTab } from './components/type-tabs'
 import { AccountsToolbar } from './components/accounts-toolbar'
 import { AccountsTable } from './components/accounts-table'
@@ -58,6 +58,7 @@ export default function AccountsPage() {
   const deleteMutation = useDeleteAccount()
   const toggleMutation = useToggleAuthFile()
   const autoSyncMutation = useSetAutoSync()
+  const disabledMutation = useToggleKeyDisabled()
 
   const [open, setOpen] = useState<DialogKind>(null)
   const [current, setCurrent] = useState<Account | null>(null)
@@ -198,6 +199,7 @@ export default function AccountsPage() {
               onToggle: (a) => toggleMutation.mutate({ name: a.authFile!, disabled: !a.disabled }),
               onAutoSync: (a) => autoSyncMutation.mutate({ key: a.key, enabled: !a.autoSync }),
               onCheckConn: (a) => checkConn([a]),
+              onToggleDisabled: (a) => disabledMutation.mutate({ key: a.key, disabled: !a.disabled }),
             }}
             connChecking={connChecking}
           />

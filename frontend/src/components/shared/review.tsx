@@ -53,6 +53,7 @@ export function ChangeActionBadge({ action }: { action: string }) {
     rejected: 'bg-destructive/10 text-destructive',
     restored: 'bg-warning/10 text-warning',
     removed: 'bg-muted text-muted-foreground',
+    'auto-disabled': 'bg-warning/10 text-warning',
   }
   const labels: Record<string, string> = {
     discovered: t('review.action.discovered'),
@@ -60,6 +61,7 @@ export function ChangeActionBadge({ action }: { action: string }) {
     rejected: t('review.action.rejected'),
     restored: t('review.action.restored'),
     removed: t('review.action.removed'),
+    'auto-disabled': t('review.action.autoDisabled'),
   }
   return (
     <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium', map[action] ?? map.removed)}>

@@ -125,6 +125,8 @@ export interface Settings {
   defaultUA: string
   connAuto: boolean
   connIntervalSec: number
+  guardAuto: boolean
+  guardThreshold: number
 }
 
 export interface RuntimeStatus {

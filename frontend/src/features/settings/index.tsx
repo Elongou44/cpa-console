@@ -34,6 +34,8 @@ export default function SettingsPage() {
   const [defaultUA, setDefaultUA] = useState('')
   const [connAuto, setConnAuto] = useState(true)
   const [connIntervalSec, setConnIntervalSec] = useState(300)
+  const [guardAuto, setGuardAuto] = useState(false)
+  const [guardThreshold, setGuardThreshold] = useState(3)
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
@@ -44,6 +46,8 @@ export default function SettingsPage() {
       setDefaultUA(settingsQuery.data.defaultUA ?? '')
       setConnAuto(settingsQuery.data.connAuto ?? true)
       setConnIntervalSec(settingsQuery.data.connIntervalSec ?? 300)
+      setGuardAuto(settingsQuery.data.guardAuto ?? false)
+      setGuardThreshold(settingsQuery.data.guardThreshold ?? 3)
       setLoaded(true)
     }
   }, [settingsQuery.data, loaded])
@@ -58,6 +62,8 @@ export default function SettingsPage() {
         defaultUA,
         connAuto,
         connIntervalSec,
+        guardAuto,
+        guardThreshold,
       }),
     onSuccess: () => {
       toast.success(t('settings.saved'))
@@ -180,6 +186,25 @@ export default function SettingsPage() {
                 className="w-32 font-mono"
               />
             </div>
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div>
+                <Label>{t('settings.guardAuto')}</Label>
+                <p className="mt-1 text-xs text-muted-foreground">{t('settings.guardAutoHint')}</p>
+              </div>
+              <Switch checked={guardAuto} onCheckedChange={setGuardAuto} />
+            </div>
+            {guardAuto && (
+              <div className="grid gap-1.5">
+                <Label>{t('settings.guardThreshold')}</Label>
+                <Input
+                  type="number"
+                  min={2}
+                  value={guardThreshold}
+                  onChange={(e) => setGuardThreshold(Math.max(2, Number(e.target.value) || 2))}
+                  className="w-32 font-mono"
+                />
+              </div>
+            )}
           </CardContent>
           <CardFooter>
             <Button variant="outline" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending}>

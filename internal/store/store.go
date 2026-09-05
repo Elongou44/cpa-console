@@ -113,6 +113,14 @@ CREATE TABLE IF NOT EXISTS account_settings (
 		return err
 	}
 	// 上游连通性检测结果（JSON：ok/latencyMs/models/error/checkedAt），由手动检测写入。
+	if err := s.ensureColumn("account_settings", "conn", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// 上游连通性检测结果（JSON：ok/latencyMs/models/error/checkedAt），由手动检测写入。
+	if err := s.ensureColumn("account_settings", "conn", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// 上游连通性检测结果之外的最后一张本地表：account_settings 其余列见上方各 ensureColumn。
 	return s.ensureColumn("account_settings", "conn", "TEXT NOT NULL DEFAULT ''")
 }
 
@@ -122,6 +130,7 @@ type ConnStatus struct {
 	LatencyMs int64  `json:"latencyMs"`
 	Models    int    `json:"models"`
 	Error     string `json:"error,omitempty"`
+	Fails     int    `json:"fails"` // 连续失败次数（成功清零），供自动禁用判断与展示
 	CheckedAt string `json:"checkedAt"`
 }
 

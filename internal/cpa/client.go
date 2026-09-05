@@ -138,6 +138,11 @@ func (c *Client) PutKeyItems(ctx context.Context, collection string, items []map
 	return c.do(ctx, http.MethodPut, "/"+collection, nil, items, nil)
 }
 
+// PatchKeyItem 按索引更新单个条目（CPA PATCH 语义：只改该条目，不会丢其他条目的字段）。
+func (c *Client) PatchKeyItem(ctx context.Context, collection string, index int, value map[string]any) error {
+	return c.do(ctx, http.MethodPatch, "/"+collection, nil, map[string]any{"index": index, "value": value}, nil)
+}
+
 // GetAuthFiles 读取 OAuth 凭据文件列表。
 func (c *Client) GetAuthFiles(ctx context.Context) ([]map[string]any, error) {
 	var raw any

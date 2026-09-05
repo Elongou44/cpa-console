@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1161,6 +1162,12 @@ type ConnectivityResult struct {
 // CheckConnectivity 并行探测 Key 型账号上游连通性（直连模型清单接口），
 // 结果持久化到本地库供列表展示；keys 为空时检测全部，OAuth 凭据不参与检测。
 func (b *Biz) CheckConnectivity(ctx context.Context, keys []string) ([]ConnectivityResult, error) {
+	// 检测与同步互斥：自动停用写入 CPA 后，不能被并发同步的收敛用旧快照覆盖回去。
+	ok, done := b.beginSyncExcl()
+	if !ok {
+		return nil, fmt.Errorf("同步正在进行中，请稍候")
+	}
+	defer done()
 	c, err := b.Client()
 	if err != nil {
 		return nil, err
@@ -1226,15 +1233,117 @@ func (b *Biz) CheckConnectivity(ctx context.Context, keys []string) ([]Connectiv
 	b.mu.Lock()
 	b.lastConnAt = time.Now()
 	b.mu.Unlock()
-	for _, res := range results {
+
+	// 连续失败计数：成功清零，失败累加（供「连续失败自动停用」判断与展示）。
+	prevConns, _ := b.Store.AccountConns()
+	fails := map[string]int{}
+	for i := range results {
+		res := &results[i]
 		if res.Key == "" {
 			continue
 		}
+		fails[res.Key] = 0
+		if !res.OK {
+			fails[res.Key] = prevConns[res.Key].Fails + 1
+		}
 		_ = b.Store.SetAccountConn(res.Key, store.ConnStatus{
-			OK: res.OK, LatencyMs: res.LatencyMs, Models: res.Models, Error: res.Error, CheckedAt: checked,
+			OK: res.OK, LatencyMs: res.LatencyMs, Models: res.Models, Error: res.Error,
+			Fails: fails[res.Key], CheckedAt: checked,
 		})
 	}
+
+	// 守卫：连续失败达到阈值的启用中账号，写入 CPA disabled 自动停用。
+	guardAuto := false
+	threshold := 3
+	if st, err := b.Settings(); err == nil {
+		guardAuto = st["guard_auto"] == "true"
+		if v, err := strconv.Atoi(st["guard_threshold"]); err == nil && v >= 2 {
+			threshold = v
+		}
+	}
+	if guardAuto {
+		var recs []store.ChangeRecord
+		for _, def := range keyCollections {
+			for idx, entry := range snap.keyItems[def.Collection] {
+				acct := keyAccountFrom(def, entry)
+				// 仅兼容型参与自动停用：其条目原生支持 disabled 字段；
+				// codex 等类型的管理接口会丢弃该字段（实测），不做不可靠的操作。
+				if def.Type != "openai-compatibility" || acct.Disabled || fails[acct.Key] < threshold {
+					continue
+				}
+				// PATCH 逐条停用（PUT 整体替换会丢 disabled 字段），CPA 立即停止路由。
+				entry["disabled"] = true
+				if err := c.PatchKeyItem(ctx, def.Collection, idx, entry); err != nil {
+					slog.Warn("自动停用写入 CPA 失败", "account", acct.Name, "err", err)
+					continue
+				}
+				slog.Warn("连通性连续失败，已自动停用账号", "account", acct.Name, "fails", fails[acct.Key], "threshold", threshold)
+				recs = append(recs, store.ChangeRecord{
+					AccountKey: acct.Key, AccountType: acct.Type, AccountName: acct.Name,
+					Action: "auto-disabled",
+				})
+			}
+		}
+		if len(recs) > 0 {
+			_ = b.Store.InsertChangeRecords(recs)
+		}
+	}
 	return results, nil
+}
+
+// SetKeyAccountDisabled 启用/停用 Key 型账号（写入 CPA 条目 disabled 字段）。
+func (b *Biz) SetKeyAccountDisabled(ctx context.Context, key string, disabled bool) error {
+	typ, _, err := splitKey(key)
+	if err != nil {
+		return err
+	}
+	def, ok := defByType(typ)
+	if !ok {
+		return fmt.Errorf("不支持的账号类型: %s", typ)
+	}
+	c, err := b.Client()
+	if err != nil {
+		return err
+	}
+	items, err := c.GetKeyItems(ctx, def.Collection)
+	if err != nil {
+		return err
+	}
+	for idx, entry := range items {
+		if keyAccountFrom(def, entry).Key != key {
+			continue
+		}
+		if def.Type != "openai-compatibility" {
+			return fmt.Errorf("该类型暂不支持通过控制台启停（CPA 管理接口不支持 disabled 字段）")
+		}
+		if disabled {
+			entry["disabled"] = true
+		} else {
+			delete(entry, "disabled")
+		}
+		// PATCH 逐条更新（PUT 整体替换会丢 disabled 字段），随后回读校验实际状态。
+		if err := c.PatchKeyItem(ctx, def.Collection, idx, entry); err != nil {
+			return err
+		}
+		verify, err := c.GetKeyItems(ctx, def.Collection)
+		if err == nil {
+			for _, it := range verify {
+				if keyAccountFrom(def, it).Key != key {
+					continue
+				}
+				if cpa.GetBool(it, "disabled") != disabled {
+					return fmt.Errorf("CPA 实际状态与请求不一致，请刷新后重试")
+				}
+				break
+			}
+		}
+		if !disabled && def.Type != "openai-compatibility" {
+			// 路由清单由收敛按已放行状态重建
+			go b.enforceAfterReview()
+		}
+		return nil
+	}
+	return fmt.Errorf("账号不存在")
 }
 
 // SetAuthFileStatus 启用/禁用 OAuth 凭据。
