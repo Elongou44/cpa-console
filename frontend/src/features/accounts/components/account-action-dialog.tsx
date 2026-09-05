@@ -281,11 +281,10 @@ export function AccountActionDialog({
                   <button
                     type="button"
                     key={x.value}
-                    disabled={isEdit}
                     onClick={() => setType(x.value)}
                     className={cn(
                       'flex shrink-0 items-center gap-2.5 rounded-lg border p-3 text-sm transition-colors md:w-full',
-                      isEdit ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-accent/50',
+                      'cursor-pointer hover:bg-accent/50',
                       type === x.value && 'border-primary bg-accent/40 shadow-sm',
                     )}
                   >
@@ -299,6 +298,11 @@ export function AccountActionDialog({
                   </button>
                 ))}
               </div>
+              {isEdit && account && type !== account.type && (
+                <p className="shrink-0 text-xs leading-relaxed text-warning">
+                  {t('accounts.dialog.typeChangeHint')}
+                </p>
+              )}
             </div>
 
             {/* 字段区 */}

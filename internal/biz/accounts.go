@@ -636,10 +636,14 @@ func (b *Biz) insertDiscoveryRecords(rows []store.AccountModel, defaultStatus fu
 }
 
 // UpdateAccount 按 key 更新账号（空字段保持不变）。
+// 输入的 type 与现有类型不同时，切换为在目标类型集合中重建条目并迁移本地状态。
 func (b *Biz) UpdateAccount(ctx context.Context, key string, in AccountInput) (Account, error) {
 	typ, _, err := splitKey(key)
 	if err != nil {
 		return Account{}, err
+	}
+	if in.Type != "" && in.Type != typ {
+		return b.changeAccountType(ctx, key, in)
 	}
 	def, ok := defByType(typ)
 	if !ok {
@@ -711,6 +715,141 @@ func (b *Biz) UpdateAccount(ctx context.Context, key string, in AccountInput) (A
 	_ = b.Store.SetAccountTags(acct.Key, normalizeTags(in.Tags))
 	_ = b.Store.SetAccountUserAgent(acct.Key, strings.TrimSpace(in.UA))
 	return acct, nil
+}
+
+// changeAccountType 切换账号类型：在目标类型集合中重建条目并迁移本地状态。
+// Key 与 Base URL 随迁；目标为兼容型时全部 Key 写入同一条目，其余类型每个 Key 一个条目。
+// 审批状态无法跨类型沿用（模型集合语义不同），删除后由同步重新发现；账号级设置（分组/标签/UA/自动同步）迁移到新身份。
+func (b *Biz) changeAccountType(ctx context.Context, key string, in AccountInput) (Account, error) {
+	oldType, _, err := splitKey(key)
+	if err != nil {
+		return Account{}, err
+	}
+	oldDef, ok := defByType(oldType)
+	if !ok {
+		return Account{}, fmt.Errorf("不支持的账号类型: %s", oldType)
+	}
+	newDef, ok := defByType(in.Type)
+	if !ok {
+		return Account{}, fmt.Errorf("不支持的账号类型: %s", in.Type)
+	}
+	c, err := b.Client()
+	if err != nil {
+		return Account{}, err
+	}
+	oldItems, err := c.GetKeyItems(ctx, oldDef.Collection)
+	if err != nil {
+		return Account{}, err
+	}
+	idx := -1
+	for i, it := range oldItems {
+		if keyAccountFrom(oldDef, it).Key == key {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return Account{}, fmt.Errorf("账号不存在或标识已变更，请刷新后重试")
+	}
+	oldEntry := oldItems[idx]
+
+	// 迁移的 Key：输入覆盖优先，否则随迁原账号全部 Key。
+	keys := normalizeKeys(in.APIKeys, in.APIKey)
+	if len(keys) == 0 {
+		keys = compatEntryAPIKeys(oldEntry)
+	}
+	if len(keys) == 0 {
+		return Account{}, fmt.Errorf("原账号没有可迁移的 API Key")
+	}
+	base := strings.TrimSpace(in.BaseURL)
+	if base == "" {
+		base, _ = cpa.GetStr(oldEntry, "base-url", "baseUrl", "base_url")
+	}
+	if newDef.Type == "codex" && base == "" {
+		return Account{}, fmt.Errorf("Codex 账号必须填写 Base URL")
+	}
+
+	// 目标为兼容型：需要名称（输入 > 原名称 > 主机名），且不得与目标集合内已有账号重名。
+	migrate := in
+	migrate.Type = newDef.Type
+	migrate.BaseURL = base
+	if newDef.Type == "openai-compatibility" {
+		name := strings.TrimSpace(in.Name)
+		if name == "" {
+			if n, _ := cpa.GetStr(oldEntry, "name"); n != "" {
+				name = n
+			}
+		}
+		if name == "" {
+			name = hostOf(base)
+		}
+		if base == "" {
+			return Account{}, fmt.Errorf("OpenAI 兼容账号必须填写 Base URL")
+		}
+		migrate.Name = name
+		newItems, err := c.GetKeyItems(ctx, newDef.Collection)
+		if err != nil {
+			return Account{}, err
+		}
+		for _, it := range newItems {
+			if n, _ := cpa.GetStr(it, "name"); n == name {
+				return Account{}, fmt.Errorf("目标类型中已存在同名账号: %s", name)
+			}
+		}
+		entry := buildEntry(newDef, migrate, keys)
+		newItems = append(newItems, entry)
+		if err := c.PutKeyItems(ctx, newDef.Collection, newItems); err != nil {
+			return Account{}, err
+		}
+		// 新条目写入成功后再从旧集合移除，避免中途失败丢账号。
+		oldItems = append(oldItems[:idx], oldItems[idx+1:]...)
+		if err := c.PutKeyItems(ctx, oldDef.Collection, oldItems); err != nil {
+			return Account{}, err
+		}
+		acct := keyAccountFrom(newDef, entry)
+		b.migrateAccountState(key, []Account{acct}, migrate)
+		return acct, nil
+	}
+
+	// 其余类型：每个 Key 一个条目。
+	newItems, err := c.GetKeyItems(ctx, newDef.Collection)
+	if err != nil {
+		return Account{}, err
+	}
+	var entries []map[string]any
+	for _, k := range keys {
+		entries = append(entries, buildEntry(newDef, migrate, []string{k}))
+	}
+	newItems = append(newItems, entries...)
+	if err := c.PutKeyItems(ctx, newDef.Collection, newItems); err != nil {
+		return Account{}, err
+	}
+	// 新条目写入成功后再从旧集合移除，避免中途失败丢账号。
+	oldItems = append(oldItems[:idx], oldItems[idx+1:]...)
+	if err := c.PutKeyItems(ctx, oldDef.Collection, oldItems); err != nil {
+		return Account{}, err
+	}
+	created := make([]Account, 0, len(entries))
+	for _, e := range entries {
+		created = append(created, keyAccountFrom(newDef, e))
+	}
+	b.migrateAccountState(key, created, migrate)
+	return created[0], nil
+}
+
+// migrateAccountState 类型切换后的本地状态迁移：旧身份的审批状态删除（重新同步发现），
+// 账号级设置迁移到首个新身份，其余新身份按输入设置初始化（自动同步默认关闭）。
+func (b *Biz) migrateAccountState(oldKey string, created []Account, in AccountInput) {
+	if removed, err := b.Store.DeleteByAccounts([]string{oldKey}); err == nil && len(removed) > 0 {
+		_ = b.recordRemoved(removed)
+	}
+	_ = b.Store.RenameAccountSetting(oldKey, created[0].Key)
+	for _, a := range created[1:] {
+		_ = b.Store.SetAccountGroup(a.Key, strings.TrimSpace(in.Group))
+		_ = b.Store.SetAccountTags(a.Key, normalizeTags(in.Tags))
+		_ = b.Store.SetAccountUserAgent(a.Key, strings.TrimSpace(in.UA))
+		_ = b.Store.SetAutoSync(a.Key, false)
+	}
 }
 
 // updateCompatModels 处理 openai-compatibility 模型清单的用户编辑：

@@ -76,6 +76,7 @@ const dict: Record<string, string> = {
   'accounts.dialog.editTitle': '编辑账号',
   'accounts.dialog.description': '保存后写入 CPA 并热生效；手动添加的模型直接放行，同步新发现的模型进入待审批',
   'accounts.dialog.type': '账号类型',
+  'accounts.dialog.typeChangeHint': '保存后将按新类型重建账号：Key 与设置随迁，模型审批状态需重新同步发现',
   'accounts.dialog.name': '账号名称',
   'accounts.dialog.nameHint': 'OpenAI 兼容账号必填，作为唯一标识',
   'accounts.dialog.apiKey': 'API Key',
