@@ -172,45 +172,61 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
                 </Tooltip>
               </TableCell>
               <TableCell className="pr-4 text-right">
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon-sm">
-                      <MoreHorizontal className="size-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-40">
-                    {account.kind === 'key' && (
-                      <DropdownMenuItem onClick={() => actions.onEdit(account)}>
-                        <Pencil />
-                        {t('common.edit')}
-                      </DropdownMenuItem>
-                    )}
-                    <DropdownMenuItem onClick={() => actions.onReview(account)}>
-                      <ScanEye />
-                      {t('accounts.review')}
-                      {account.pendingCount > 0 && (
-                        <Badge variant="secondary" className="ml-auto h-4 px-1.5 text-[10px]">
-                          {account.pendingCount}
-                        </Badge>
-                      )}
-                    </DropdownMenuItem>
-                    {account.kind === 'oauth' && account.status !== 'error' && (
-                      <DropdownMenuItem onClick={() => actions.onToggle(account)}>
-                        <Power className={account.disabled ? 'text-success' : 'text-orange-500'} />
-                        {account.disabled ? t('accounts.enable') : t('accounts.disable')}
-                      </DropdownMenuItem>
-                    )}
-                    {account.kind === 'key' && (
-                      <>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => actions.onDelete(account)}>
-                          <Trash2 />
-                          {t('common.delete')}
+                <div className="flex items-center justify-end gap-1">
+                  {account.kind === 'key' && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button variant="ghost" size="icon-sm" onClick={() => actions.onEdit(account)}>
+                          <Pencil className="size-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t('common.edit')}</TooltipContent>
+                    </Tooltip>
+                  )}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant="ghost" size="icon-sm" className="relative" onClick={() => actions.onReview(account)}>
+                        <ScanEye className="size-4" />
+                        {account.pendingCount > 0 && (
+                          <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full border border-warning/20 bg-warning/15 px-0.5 text-[9px] font-medium leading-none text-warning">
+                            {account.pendingCount}
+                          </span>
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{t('accounts.review')}</TooltipContent>
+                  </Tooltip>
+                  {account.kind === 'key' && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => actions.onDelete(account)}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t('common.delete')}</TooltipContent>
+                    </Tooltip>
+                  )}
+                  {account.kind === 'oauth' && account.status !== 'error' && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon-sm">
+                          <MoreHorizontal className="size-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-40">
+                        <DropdownMenuItem onClick={() => actions.onToggle(account)}>
+                          <Power className={account.disabled ? 'text-success' : 'text-orange-500'} />
+                          {account.disabled ? t('accounts.enable') : t('accounts.disable')}
                         </DropdownMenuItem>
-                      </>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
               </TableCell>
             </TableRow>
           ))}
