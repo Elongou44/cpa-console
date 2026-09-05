@@ -188,6 +188,20 @@ func (h *handler) revealAccountKey(c *gin.Context) {
 	ok(c, gin.H{"apiKeys": keys, "apiKey": first})
 }
 
+// checkConnectivity 并行检测账号上游连通性并持久化结果（keys 为空时检测全部）。
+func (h *handler) checkConnectivity(c *gin.Context) {
+	var in struct {
+		Keys []string `json:"keys"`
+	}
+	_ = c.ShouldBindJSON(&in)
+	results, err := h.b.CheckConnectivity(c.Request.Context(), in.Keys)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	ok(c, gin.H{"results": results})
+}
+
 // accountModelsDetail 返回某账号在 CPA 中已加入的全部模型及其 alias 映射。
 func (h *handler) accountModelsDetail(c *gin.Context) {
 	key, valid := decodeKey(c)

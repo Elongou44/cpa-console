@@ -1,4 +1,4 @@
-import { MoreHorizontal, Pencil, ScanEye, Trash2, Power } from 'lucide-react'
+import { Loader2, MoreHorizontal, Pencil, ScanEye, Trash2, Power } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -6,7 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { t } from '@/lib/i18n'
-import { cn } from '@/lib/utils'
+import { cn, formatDateTime } from '@/lib/utils'
 import type { Account } from '@/lib/types'
 import { AccountStatusBadge } from '@/components/shared/review'
 import { TypeBadge } from '@/components/shared/type-icon'
@@ -17,10 +17,20 @@ export interface AccountRowActions {
   onDelete: (account: Account) => void
   onToggle: (account: Account) => void
   onAutoSync: (account: Account) => void
+  onCheckConn: (account: Account) => void
 }
 
 /** 账号表格。 */
-export function AccountsTable({ accounts, actions }: { accounts: Account[]; actions: AccountRowActions }) {
+export function AccountsTable({
+  accounts,
+  actions,
+  connChecking,
+}: {
+  accounts: Account[]
+  actions: AccountRowActions
+  /** 正在进行连通性检测的账号标识。 */
+  connChecking?: Set<string>
+}) {
   return (
     <div className="overflow-hidden rounded-2xl border bg-card shadow-sm">
       <Table>
@@ -31,6 +41,7 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
             <TableHead>{t('accounts.columns.baseUrl')}</TableHead>
             <TableHead>{t('accounts.columns.apiKey')}</TableHead>
             <TableHead>{t('accounts.columns.status')}</TableHead>
+            <TableHead className="text-center">{t('accounts.connColumn')}</TableHead>
             <TableHead className="text-right">{t('accounts.columns.models')}</TableHead>
             <TableHead className="text-right">{t('accounts.columns.excluded')}</TableHead>
             <TableHead className="text-center">{t('accounts.columns.autoSync')}</TableHead>
@@ -48,6 +59,16 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
                       {account.group}
                     </Badge>
                   )}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
+                    {account.kind === 'oauth' ? account.authFile : account.apiKeyMasked}
+                  </span>
+                  {(account.tags ?? []).slice(0, 2).map((tag) => (
+                    <Badge key={tag} variant="outline" className="h-4 shrink-0 px-1.5 text-[10px] font-normal text-muted-foreground">
+                      {tag}
+                    </Badge>
+                  ))}
                   {(account.tags?.length ?? 0) > 2 && (
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -58,17 +79,7 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
                       <TooltipContent>{account.tags?.slice(2).join('、')}</TooltipContent>
                     </Tooltip>
                   )}
-                  {(account.tags ?? []).slice(0, 2).map((tag) => (
-                    <Badge key={tag} variant="outline" className="h-4 shrink-0 px-1.5 text-[10px] font-normal text-muted-foreground">
-                      {tag}
-                    </Badge>
-                  ))}
                 </div>
-                {account.kind === 'oauth' ? (
-                  <div className="truncate font-mono text-[11px] text-muted-foreground">{account.authFile}</div>
-                ) : (
-                  <div className="truncate font-mono text-[11px] text-muted-foreground">{account.apiKeyMasked}</div>
-                )}
               </TableCell>
               <TableCell>
                 <div className="flex items-center gap-1.5">
@@ -85,7 +96,7 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
                   )}
                 </div>
               </TableCell>
-              <TableCell className="max-w-52">
+              <TableCell className="max-w-44">
                 {account.baseUrl ? (
                   <Tooltip>
                     <TooltipTrigger className="block max-w-full cursor-default truncate font-mono text-xs text-muted-foreground">
@@ -130,6 +141,60 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
                   <AccountStatusBadge status={account.status} />
                 )}
               </TableCell>
+              <TableCell className="text-center">
+                {account.kind === 'oauth' ? (
+                  <span className="text-muted-foreground/60">—</span>
+                ) : (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="inline-flex cursor-pointer items-center justify-center gap-1.5 disabled:opacity-50"
+                        disabled={connChecking?.has(account.key)}
+                        onClick={() => actions.onCheckConn(account)}
+                      >
+                        {connChecking?.has(account.key) ? (
+                          <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+                        ) : account.conn ? (
+                          account.conn.ok ? (
+                            <>
+                              <span className="size-2 rounded-full bg-success shadow-[0_0_5px] shadow-success/70" />
+                              <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                                {account.conn.latencyMs}ms
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="size-2 rounded-full bg-destructive shadow-[0_0_5px] shadow-destructive/60" />
+                              <span className="text-[11px] text-muted-foreground">{t('accounts.connFail')}</span>
+                            </>
+                          )
+                        ) : (
+                          <>
+                            <span className="size-2 rounded-full border border-muted-foreground/50" />
+                            <span className="text-[11px] text-muted-foreground">{t('accounts.connUntested')}</span>
+                          </>
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {account.conn ? (
+                        account.conn.ok ? (
+                          t('accounts.connTipOk', {
+                            models: account.conn.models,
+                            latency: account.conn.latencyMs,
+                            time: formatDateTime(account.conn.checkedAt),
+                          })
+                        ) : (
+                          t('accounts.connTipFail', { error: account.conn.error ?? '', time: formatDateTime(account.conn.checkedAt) })
+                        )
+                      ) : (
+                        t('accounts.connTipNever')
+                      )}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+              </TableCell>
               <TableCell className="text-right">
                 <div className="flex items-center justify-end gap-1.5">
                   <Tooltip>
@@ -158,7 +223,7 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
                       type="button"
                       onClick={() => actions.onAutoSync(account)}
                       className={cn(
-                        'inline-flex h-6 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors',
+                        'inline-flex h-6 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-xs font-medium transition-colors',
                         account.autoSync
                           ? 'border-success/40 bg-success/10 text-success hover:bg-success/20'
                           : 'border-border bg-muted/40 text-muted-foreground hover:text-foreground',

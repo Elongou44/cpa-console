@@ -109,7 +109,20 @@ CREATE TABLE IF NOT EXISTS account_settings (
 		return err
 	}
 	// 控制台显示名：CPA 条目无 name 字段的类型（codex 等）用它保存用户命名的名称。
-	return s.ensureColumn("account_settings", "display_name", "TEXT NOT NULL DEFAULT ''")
+	if err := s.ensureColumn("account_settings", "display_name", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// 上游连通性检测结果（JSON：ok/latencyMs/models/error/checkedAt），由手动检测写入。
+	return s.ensureColumn("account_settings", "conn", "TEXT NOT NULL DEFAULT ''")
+}
+
+// ConnStatus 单账号上游连通性检测结果。
+type ConnStatus struct {
+	OK        bool   `json:"ok"`
+	LatencyMs int64  `json:"latencyMs"`
+	Models    int    `json:"models"`
+	Error     string `json:"error,omitempty"`
+	CheckedAt string `json:"checkedAt"`
 }
 
 // ensureColumn 为旧库补列（幂等）。
@@ -728,6 +741,40 @@ func (s *Store) MigrateAccountModels(oldKey, newKey, newType, newName string) er
 	return tx.Commit()
 }
 
+// AccountConns 返回各账号最近一次连通性检测结果（未检测过的账号不在结果中）。
+func (s *Store) AccountConns() (map[string]ConnStatus, error) {
+	rows, err := s.DB.Query(`SELECT account_key, conn FROM account_settings WHERE conn != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]ConnStatus{}
+	for rows.Next() {
+		var k, raw string
+		if err := rows.Scan(&k, &raw); err != nil {
+			return nil, err
+		}
+		var st ConnStatus
+		if err := json.Unmarshal([]byte(raw), &st); err != nil {
+			continue
+		}
+		out[k] = st
+	}
+	return out, rows.Err()
+}
+
+// SetAccountConn 保存账号连通性检测结果（覆盖写入）。
+func (s *Store) SetAccountConn(accountKey string, st ConnStatus) error {
+	raw, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.Exec(
+		`INSERT INTO account_settings(account_key, conn) VALUES(?, ?)
+		ON CONFLICT(account_key) DO UPDATE SET conn = excluded.conn`, accountKey, string(raw))
+	return err
+}
+
 // RenameAccountSetting 账号标识变更时迁移配置（旧标识不存在则不做任何事）。
 func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 	tx, err := s.DB.Begin()
@@ -736,8 +783,8 @@ func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 	}
 	defer tx.Rollback()
 	var autoSync int
-	var grp, tags, ua, displayName string
-	err = tx.QueryRow(`SELECT auto_sync, grp, tags, ua, display_name FROM account_settings WHERE account_key = ?`, oldKey).Scan(&autoSync, &grp, &tags, &ua, &displayName)
+	var grp, tags, ua, displayName, conn string
+	err = tx.QueryRow(`SELECT auto_sync, grp, tags, ua, display_name, conn FROM account_settings WHERE account_key = ?`, oldKey).Scan(&autoSync, &grp, &tags, &ua, &displayName, &conn)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -745,9 +792,9 @@ func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO account_settings(account_key, auto_sync, grp, tags, ua, display_name) VALUES(?, ?, ?, ?, ?, ?)
-		ON CONFLICT(account_key) DO UPDATE SET auto_sync = excluded.auto_sync, grp = excluded.grp, tags = excluded.tags, ua = excluded.ua, display_name = excluded.display_name`,
-		newKey, autoSync, grp, tags, ua, displayName); err != nil {
+		`INSERT INTO account_settings(account_key, auto_sync, grp, tags, ua, display_name, conn) VALUES(?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(account_key) DO UPDATE SET auto_sync = excluded.auto_sync, grp = excluded.grp, tags = excluded.tags, ua = excluded.ua, display_name = excluded.display_name, conn = excluded.conn`,
+		newKey, autoSync, grp, tags, ua, displayName, conn); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM account_settings WHERE account_key = ?`, oldKey); err != nil {

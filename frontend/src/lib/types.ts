@@ -24,10 +24,20 @@ export interface Account {
   ua?: string
   modelCount: number
   approvedCount: number
+  /** 最近一次上游连通性检测（仅本控制台，未检测过为空）。 */
+  conn?: AccountConn
   pendingCount: number
   excludedCount: number
   successCount: number
   failureCount: number
+}
+
+export interface AccountConn {
+  ok: boolean
+  latencyMs: number
+  models: number
+  error?: string
+  checkedAt: string
 }
 
 export interface AccountDetail {

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"cpa-console/internal/cpa"
@@ -64,8 +65,9 @@ type Account struct {
 	Tags          []string `json:"tags,omitempty"`     // 本地标签列表，同样仅存控制台
 	Priority      int      `json:"priority"`           // 路由优先级，写入 CPA 条目的 priority 字段
 	UA            string   `json:"ua,omitempty"`       // 账号级 User-Agent，仅存控制台，覆盖默认 UA
-	ModelCount    int      `json:"modelCount"`
-	ApprovedCount int      `json:"approvedCount"` // 已放行（启用）模型数
+	ModelCount    int               `json:"modelCount"`
+	ApprovedCount int               `json:"approvedCount"` // 已放行（启用）模型数
+	Conn          *store.ConnStatus `json:"conn,omitempty"` // 最近一次上游连通性检测（仅本控制台）
 	PendingCount  int      `json:"pendingCount"`
 	ExcludedCount int      `json:"excludedCount"`
 	SuccessCount  int64    `json:"successCount"`
@@ -452,6 +454,7 @@ func (b *Biz) ListAccounts(ctx context.Context, q, status, typ string) ([]Accoun
 	groups, _ := b.Store.AccountGroups()
 	tagsMap, _ := b.Store.AccountTags()
 	uas, _ := b.Store.AccountUserAgents()
+	conns, _ := b.Store.AccountConns()
 	var out []Account
 	needle := strings.ToLower(q)
 	statusSet := map[string]bool{}
@@ -468,6 +471,9 @@ func (b *Biz) ListAccounts(ctx context.Context, q, status, typ string) ([]Accoun
 		a.Group = groups[a.Key]
 		a.Tags = tagsMap[a.Key]
 		a.UA = uas[a.Key]
+		if cs, ok := conns[a.Key]; ok {
+			a.Conn = &cs
+		}
 		if a.Type == "openai-compatibility" {
 			// openai-compatibility 条目无 excluded-models 字段，屏蔽数 = 未放行模型数
 			a.ExcludedCount = blockedCounts[a.Key]
@@ -1144,6 +1150,92 @@ func (b *Biz) RevealAccountKeys(ctx context.Context, key string) ([]string, erro
 		}
 	}
 	return nil, fmt.Errorf("账号不存在")
+}
+
+// ConnectivityResult 单账号上游连通性检测结果。
+type ConnectivityResult struct {
+	Key       string `json:"key"`
+	Name      string `json:"name"`
+	OK        bool   `json:"ok"`
+	LatencyMs int64  `json:"latencyMs"`
+	Models    int    `json:"models"`
+	Error     string `json:"error,omitempty"`
+}
+
+// CheckConnectivity 并行探测 Key 型账号上游连通性（直连模型清单接口），
+// 结果持久化到本地库供列表展示；keys 为空时检测全部，OAuth 凭据不参与检测。
+func (b *Biz) CheckConnectivity(ctx context.Context, keys []string) ([]ConnectivityResult, error) {
+	c, err := b.Client()
+	if err != nil {
+		return nil, err
+	}
+	snap, err := b.discover(ctx, c, false, nil)
+	if err != nil {
+		return nil, err
+	}
+	filter := map[string]bool{}
+	for _, k := range keys {
+		filter[k] = true
+	}
+	type task struct {
+		acct  Account
+		typ   string
+		token string
+		base  string
+	}
+	var tasks []task
+	for _, def := range keyCollections {
+		for _, entry := range snap.keyItems[def.Collection] {
+			acct := keyAccountFrom(def, entry)
+			if acct.Kind != "key" || (len(filter) > 0 && !filter[acct.Key]) {
+				continue
+			}
+			token, _ := cpa.GetStr(entry, "api-key", "apiKey", "api_key")
+			if def.Type == "openai-compatibility" {
+				token = compatEntryAPIKey(entry)
+			}
+			base, _ := cpa.GetStr(entry, "base-url", "baseUrl", "base_url")
+			if token == "" {
+				continue
+			}
+			tasks = append(tasks, task{acct: acct, typ: def.Type, token: token, base: base})
+		}
+	}
+	results := make([]ConnectivityResult, len(tasks))
+	sem := make(chan struct{}, 6)
+	var wg sync.WaitGroup
+	for i, t := range tasks {
+		wg.Add(1)
+		go func(i int, t task) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			res := ConnectivityResult{Key: t.acct.Key, Name: t.acct.Name}
+			started := time.Now()
+			pctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			names, err := b.probeUpstream(pctx, t.typ, t.token, t.base, "")
+			cancel()
+			res.LatencyMs = time.Since(started).Milliseconds()
+			if err != nil {
+				res.Error = err.Error()
+			} else {
+				res.OK = true
+				res.Models = len(names)
+			}
+			results[i] = res
+		}(i, t)
+	}
+	wg.Wait()
+	checked := time.Now().Format(time.RFC3339)
+	for _, res := range results {
+		if res.Key == "" {
+			continue
+		}
+		_ = b.Store.SetAccountConn(res.Key, store.ConnStatus{
+			OK: res.OK, LatencyMs: res.LatencyMs, Models: res.Models, Error: res.Error, CheckedAt: checked,
+		})
+	}
+	return results, nil
 }
 
 // SetAuthFileStatus 启用/禁用 OAuth 凭据。

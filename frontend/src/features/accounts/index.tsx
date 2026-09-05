@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { AlertTriangle, Loader2, Plus, RefreshCw } from 'lucide-react'
+import { Activity, AlertTriangle, Loader2, Plus, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableRow } from '@/components/ui/table'
@@ -19,7 +19,7 @@ import { PageBody, PageHeader } from '@/components/layout/page-header'
 import { t } from '@/lib/i18n'
 import type { Account } from '@/lib/types'
 import { useSyncNow } from '@/lib/sync'
-import { useAccounts, useDeleteAccount, useSetAutoSync, useToggleAuthFile } from './data/hooks'
+import { useAccounts, useCheckConnectivity, useDeleteAccount, useSetAutoSync, useToggleAuthFile } from './data/hooks'
 import { AccountsTypeTabs, type TypeTab } from './components/type-tabs'
 import { AccountsToolbar } from './components/accounts-toolbar'
 import { AccountsTable } from './components/accounts-table'
@@ -47,6 +47,14 @@ export default function AccountsPage() {
   const typesQuery = useAccounts({ ...filters, type: '' })
 
   const syncMutation = useSyncNow()
+  const connMutation = useCheckConnectivity()
+  const [connChecking, setConnChecking] = useState<Set<string>>(new Set())
+  // keys 为空数组表示检测全部；带 keys 时仅重测指定账号（单行点击）。
+  const checkConn = (accounts: Account[]) => {
+    if (accounts.length === 0) return
+    setConnChecking(new Set(accounts.map((a) => a.key)))
+    connMutation.mutate(accounts.map((a) => a.key), { onSettled: () => setConnChecking(new Set()) })
+  }
   const deleteMutation = useDeleteAccount()
   const toggleMutation = useToggleAuthFile()
   const autoSyncMutation = useSetAutoSync()
@@ -106,6 +114,16 @@ export default function AccountsPage() {
   return (
     <div>
       <PageHeader title={t('accounts.title')} description={t('accounts.description')}>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8"
+          onClick={() => checkConn(typesQuery.data?.accounts ?? [])}
+          disabled={connMutation.isPending}
+        >
+          {connMutation.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Activity className="size-3.5" />}
+          {t('accounts.connCheck')}
+        </Button>
         <Button variant="outline" size="sm" className="h-8" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending}>
           {syncMutation.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
           {t('common.sync')}
@@ -179,7 +197,9 @@ export default function AccountsPage() {
               onDelete: (a) => show('delete', a),
               onToggle: (a) => toggleMutation.mutate({ name: a.authFile!, disabled: !a.disabled }),
               onAutoSync: (a) => autoSyncMutation.mutate({ key: a.key, enabled: !a.autoSync }),
+              onCheckConn: (a) => checkConn([a]),
             }}
+            connChecking={connChecking}
           />
         )}
 
