@@ -116,12 +116,9 @@ CREATE TABLE IF NOT EXISTS account_settings (
 	if err := s.ensureColumn("account_settings", "conn", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	// 上游连通性检测结果（JSON：ok/latencyMs/models/error/checkedAt），由手动检测写入。
-	if err := s.ensureColumn("account_settings", "conn", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		return err
-	}
-	// 上游连通性检测结果之外的最后一张本地表：account_settings 其余列见上方各 ensureColumn。
-	return s.ensureColumn("account_settings", "conn", "TEXT NOT NULL DEFAULT ''")
+	// 控制台侧停用标记：codex 等无原生 disabled 字段的类型用它记录停用状态
+	// （停用动作写 excluded-models=["*"] 阻断路由，收敛阶段跳过这些账号）。
+	return s.ensureColumn("account_settings", "disabled_local", "INTEGER NOT NULL DEFAULT 0")
 }
 
 // ConnStatus 单账号上游连通性检测结果。
@@ -784,6 +781,36 @@ func (s *Store) SetAccountConn(accountKey string, st ConnStatus) error {
 	return err
 }
 
+// AccountLocalDisabled 返回控制台侧停用的账号标识。
+func (s *Store) AccountLocalDisabled() (map[string]bool, error) {
+	rows, err := s.DB.Query(`SELECT account_key FROM account_settings WHERE disabled_local = 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out[k] = true
+	}
+	return out, rows.Err()
+}
+
+// SetAccountLocalDisabled 写入控制台侧停用标记。
+func (s *Store) SetAccountLocalDisabled(accountKey string, disabled bool) error {
+	v := 0
+	if disabled {
+		v = 1
+	}
+	_, err := s.DB.Exec(
+		`INSERT INTO account_settings(account_key, disabled_local) VALUES(?, ?)
+		ON CONFLICT(account_key) DO UPDATE SET disabled_local = excluded.disabled_local`, accountKey, v)
+	return err
+}
+
 // RenameAccountSetting 账号标识变更时迁移配置（旧标识不存在则不做任何事）。
 func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 	tx, err := s.DB.Begin()
@@ -791,9 +818,9 @@ func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 		return err
 	}
 	defer tx.Rollback()
-	var autoSync int
+	var autoSync, disabledLocal int
 	var grp, tags, ua, displayName, conn string
-	err = tx.QueryRow(`SELECT auto_sync, grp, tags, ua, display_name, conn FROM account_settings WHERE account_key = ?`, oldKey).Scan(&autoSync, &grp, &tags, &ua, &displayName, &conn)
+	err = tx.QueryRow(`SELECT auto_sync, grp, tags, ua, display_name, conn, disabled_local FROM account_settings WHERE account_key = ?`, oldKey).Scan(&autoSync, &grp, &tags, &ua, &displayName, &conn, &disabledLocal)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -801,9 +828,9 @@ func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO account_settings(account_key, auto_sync, grp, tags, ua, display_name, conn) VALUES(?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(account_key) DO UPDATE SET auto_sync = excluded.auto_sync, grp = excluded.grp, tags = excluded.tags, ua = excluded.ua, display_name = excluded.display_name, conn = excluded.conn`,
-		newKey, autoSync, grp, tags, ua, displayName, conn); err != nil {
+		`INSERT INTO account_settings(account_key, auto_sync, grp, tags, ua, display_name, conn, disabled_local) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(account_key) DO UPDATE SET auto_sync = excluded.auto_sync, grp = excluded.grp, tags = excluded.tags, ua = excluded.ua, display_name = excluded.display_name, conn = excluded.conn, disabled_local = excluded.disabled_local`,
+		newKey, autoSync, grp, tags, ua, displayName, conn, disabledLocal); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM account_settings WHERE account_key = ?`, oldKey); err != nil {

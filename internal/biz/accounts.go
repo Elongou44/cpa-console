@@ -279,6 +279,39 @@ func compatEntryAPIKey(entry map[string]any) string {
 	return k
 }
 
+// wildcardExcluded 条目是否以通配 "*" 屏蔽全部模型（CPA UI 对 codex 等类型的「停用」语义）。
+func wildcardExcluded(entry map[string]any) bool {
+	for _, m := range cpa.StrSlice(entry["excluded-models"]) {
+		if strings.TrimSpace(m) == "*" {
+			return true
+		}
+	}
+	return false
+}
+
+// excludeAllModels 追加通配 "*" 屏蔽全部模型（保留已有逐模型屏蔽），幂等。
+func excludeAllModels(entry map[string]any) {
+	for _, m := range cpa.StrSlice(entry["excluded-models"]) {
+		if strings.TrimSpace(m) == "*" {
+			return
+		}
+	}
+	entry["excluded-models"] = append(cpa.ToAnySlice(cpa.StrSlice(entry["excluded-models"])), "*")
+}
+
+// enableAllModels 移除通配 "*"（保留其他屏蔽项）。
+// 显式写空数组而非删除字段：PATCH 为按字段合并，缺省键会被视为「不修改」。
+func enableAllModels(entry map[string]any) {
+	var kept []any
+	for _, m := range cpa.StrSlice(entry["excluded-models"]) {
+		if strings.TrimSpace(m) == "*" {
+			continue
+		}
+		kept = append(kept, m)
+	}
+	entry["excluded-models"] = kept
+}
+
 // compatEntryAPIKeys 提取条目的全部 API Key（兼容 api-key-entries 数组与单个 api-key 字段两种结构）。
 func compatEntryAPIKeys(entry map[string]any) []string {
 	var out []string
@@ -379,7 +412,8 @@ func keyAccountFrom(def collectionDef, entry map[string]any) Account {
 		a.Key = def.Type + ":" + shortHash(firstKey+"@"+base)
 	}
 	a.Status = "enabled"
-	if cpa.GetBool(entry, "disabled") {
+	if cpa.GetBool(entry, "disabled") || wildcardExcluded(entry) {
+		// codex 等无原生 disabled 的类型：CPA UI 以通配 "*" 屏蔽全部模型表示停用
 		a.Status = "disabled"
 		a.Disabled = true
 	}
@@ -1266,13 +1300,17 @@ func (b *Biz) CheckConnectivity(ctx context.Context, keys []string) ([]Connectiv
 		for _, def := range keyCollections {
 			for idx, entry := range snap.keyItems[def.Collection] {
 				acct := keyAccountFrom(def, entry)
-				// 仅兼容型参与自动停用：其条目原生支持 disabled 字段；
-				// codex 等类型的管理接口会丢弃该字段（实测），不做不可靠的操作。
-				if def.Type != "openai-compatibility" || acct.Disabled || fails[acct.Key] < threshold {
+				if acct.Disabled || fails[acct.Key] < threshold {
 					continue
 				}
 				// PATCH 逐条停用（PUT 整体替换会丢 disabled 字段），CPA 立即停止路由。
-				entry["disabled"] = true
+				// 兼容型写原生 disabled；codex 等无该字段的类型与 CPA UI 一致：通配 "*" 屏蔽全部模型。
+				if def.Type == "openai-compatibility" {
+					entry["disabled"] = true
+				} else {
+					excludeAllModels(entry)
+					_ = b.Store.SetAccountLocalDisabled(acct.Key, true)
+				}
 				if err := c.PatchKeyItem(ctx, def.Collection, idx, entry); err != nil {
 					slog.Warn("自动停用写入 CPA 失败", "account", acct.Name, "err", err)
 					continue
@@ -1313,17 +1351,29 @@ func (b *Biz) SetKeyAccountDisabled(ctx context.Context, key string, disabled bo
 		if keyAccountFrom(def, entry).Key != key {
 			continue
 		}
-		if def.Type != "openai-compatibility" {
-			return fmt.Errorf("该类型暂不支持通过控制台启停（CPA 管理接口不支持 disabled 字段）")
-		}
-		if disabled {
-			entry["disabled"] = true
+		// 兼容型写原生 disabled；codex 等无该字段的类型与 CPA UI 一致：
+		// 停用 = excluded-models 追加通配 "*"（阻断全部模型），启用 = 移除通配。
+		isCompat := def.Type == "openai-compatibility"
+		if def.Type == "openai-compatibility" {
+			// PATCH 按字段合并：启用需显式写 false，否则 false 会被视为「不修改」
+			entry["disabled"] = disabled
+		} else if disabled {
+			excludeAllModels(entry)
+			_ = b.Store.SetAccountLocalDisabled(key, true)
 		} else {
-			delete(entry, "disabled")
+			enableAllModels(entry)
+			_ = b.Store.SetAccountLocalDisabled(key, false)
 		}
-		// PATCH 逐条更新（PUT 整体替换会丢 disabled 字段），随后回读校验实际状态。
-		if err := c.PatchKeyItem(ctx, def.Collection, idx, entry); err != nil {
-			return err
+		// 写回：兼容型 PATCH 双向生效；codex 的启用需清空屏蔽清单，
+		// 而 PATCH 按字段合并清不掉空数组，必须 PUT 整集合。随后回读校验实际状态。
+		if isCompat || disabled {
+			if err := c.PatchKeyItem(ctx, def.Collection, idx, entry); err != nil {
+				return err
+			}
+		} else {
+			if err := c.PutKeyItems(ctx, def.Collection, items); err != nil {
+				return err
+			}
 		}
 		verify, err := c.GetKeyItems(ctx, def.Collection)
 		if err == nil {
@@ -1331,15 +1381,11 @@ func (b *Biz) SetKeyAccountDisabled(ctx context.Context, key string, disabled bo
 				if keyAccountFrom(def, it).Key != key {
 					continue
 				}
-				if cpa.GetBool(it, "disabled") != disabled {
+				if keyAccountFrom(def, it).Disabled != disabled {
 					return fmt.Errorf("CPA 实际状态与请求不一致，请刷新后重试")
 				}
 				break
 			}
-		}
-		if !disabled && def.Type != "openai-compatibility" {
-			// 路由清单由收敛按已放行状态重建
-			go b.enforceAfterReview()
 		}
 		return nil
 	}

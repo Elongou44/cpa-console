@@ -210,6 +210,7 @@ func (b *Biz) enforce(ctx context.Context, c *cpa.Client, snap *snapshot, status
 		return out
 	}
 
+	localDisabled, _ := b.Store.AccountLocalDisabled()
 	var errs []string
 	writes := 0
 
@@ -224,7 +225,7 @@ func (b *Biz) enforce(ctx context.Context, c *cpa.Client, snap *snapshot, status
 			changed := false
 			for i, entry := range items {
 				acct := keyAccountFrom(def, entry)
-				if skip[acct.Key] {
+				if skip[acct.Key] || localDisabled[acct.Key] || wildcardExcluded(entry) {
 					continue
 				}
 				updated, err := b.enforceCompatEntry(byAccount, acct, entry)
@@ -249,7 +250,7 @@ func (b *Biz) enforce(ctx context.Context, c *cpa.Client, snap *snapshot, status
 		changed := false
 		for i, entry := range items {
 			acct := keyAccountFrom(def, entry)
-			if skip[acct.Key] {
+			if skip[acct.Key] || localDisabled[acct.Key] || wildcardExcluded(entry) {
 				continue
 			}
 			blocked := blockedOf(acct.Key)
