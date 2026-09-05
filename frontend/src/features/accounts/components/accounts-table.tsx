@@ -129,29 +129,30 @@ export function AccountsTable({
                 )}
               </TableCell>
               <TableCell>
-                {account.kind === 'oauth' ? (
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2">
+                  {account.kind === 'oauth' ? (
                     <Switch
                       checked={!account.disabled}
                       onCheckedChange={() => actions.onToggle(account)}
                       disabled={account.status === 'error'}
                     />
-                    <AccountStatusBadge status={account.status} />
-                  </div>
-                ) : account.type === 'openai-compatibility' ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button type="button" className="cursor-pointer" onClick={() => actions.onToggleDisabled(account)}>
-                        <AccountStatusBadge status={account.status} />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      {account.disabled ? t('accounts.clickEnable') : t('accounts.clickDisable')}
-                    </TooltipContent>
-                  </Tooltip>
-                ) : (
+                  ) : (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span>
+                          <Switch
+                            checked={!account.disabled}
+                            onCheckedChange={() => actions.onToggleDisabled(account)}
+                          />
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {account.disabled ? t('accounts.clickEnable') : t('accounts.clickDisable')}
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
                   <AccountStatusBadge status={account.status} />
-                )}
+                </div>
               </TableCell>
               <TableCell className="text-center">
                 {account.kind === 'oauth' ? (
