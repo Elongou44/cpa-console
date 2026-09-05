@@ -197,6 +197,14 @@ func (b *Biz) discover(ctx context.Context, c *cpa.Client, withModels bool, skip
 	if len(snap.Accounts) == 0 && len(snap.Errors) > 0 {
 		return nil, fmt.Errorf("%s", strings.Join(snap.Errors, "; "))
 	}
+	// 控制台显示名（仅存本地库）优先于 CPA 名称/主机名，覆盖 codex 等无 name 字段的类型。
+	if displayNames, err := b.Store.AccountDisplayNames(); err == nil && len(displayNames) > 0 {
+		for i := range snap.Accounts {
+			if dn := displayNames[snap.Accounts[i].Key]; dn != "" {
+				snap.Accounts[i].Name = dn
+			}
+		}
+	}
 	return snap, nil
 }
 
@@ -605,6 +613,11 @@ func (b *Biz) CreateAccount(ctx context.Context, in AccountInput) (Account, erro
 		// 新账号默认不参与周期自动同步（手动「立即同步」不受影响），确认可用后再在列表开启。
 		_ = b.Store.SetAutoSync(k, false)
 	}
+	// 非 compat 类型 CPA 条目无 name 字段：首个条目把输入名称存为控制台显示名。
+	if def.Type != "openai-compatibility" && strings.TrimSpace(in.Name) != "" {
+		_ = b.Store.SetAccountDisplayName(createdKeys[0], strings.TrimSpace(in.Name))
+		acct.Name = strings.TrimSpace(in.Name)
+	}
 	return acct, nil
 }
 
@@ -714,6 +727,13 @@ func (b *Biz) UpdateAccount(ctx context.Context, key string, in AccountInput) (A
 	_ = b.Store.SetAccountGroup(acct.Key, strings.TrimSpace(in.Group))
 	_ = b.Store.SetAccountTags(acct.Key, normalizeTags(in.Tags))
 	_ = b.Store.SetAccountUserAgent(acct.Key, strings.TrimSpace(in.UA))
+	if def.Type != "openai-compatibility" {
+		// CPA 无 name 字段的类型：名称仅存控制台，空值清除后回落主机名显示。
+		_ = b.Store.SetAccountDisplayName(acct.Key, strings.TrimSpace(in.Name))
+		if n := strings.TrimSpace(in.Name); n != "" {
+			acct.Name = n
+		}
+	}
 	return acct, nil
 }
 
@@ -769,16 +789,25 @@ func (b *Biz) changeAccountType(ctx context.Context, key string, in AccountInput
 		return Account{}, fmt.Errorf("Codex 账号必须填写 Base URL")
 	}
 
-	// 目标为兼容型：需要名称（输入 > 原名称 > 主机名），且不得与目标集合内已有账号重名。
+	// 旧显示名：本地显示名 > CPA 条目 name；类型切换后用于延续命名。
+	oldName := ""
+	if dns, err := b.Store.AccountDisplayNames(); err == nil {
+		oldName = dns[key]
+	}
+	if oldName == "" {
+		if n, _ := cpa.GetStr(oldEntry, "name"); n != "" {
+			oldName = n
+		}
+	}
+
+	// 目标为兼容型：需要名称（输入 > 旧显示名 > 主机名），且不得与目标集合内已有账号重名。
 	migrate := in
 	migrate.Type = newDef.Type
 	migrate.BaseURL = base
 	if newDef.Type == "openai-compatibility" {
 		name := strings.TrimSpace(in.Name)
 		if name == "" {
-			if n, _ := cpa.GetStr(oldEntry, "name"); n != "" {
-				name = n
-			}
+			name = oldName
 		}
 		if name == "" {
 			name = hostOf(base)
@@ -808,6 +837,8 @@ func (b *Biz) changeAccountType(ctx context.Context, key string, in AccountInput
 		}
 		acct := keyAccountFrom(newDef, entry)
 		b.migrateAccountState(key, []Account{acct}, migrate)
+		// 兼容型名称由 CPA 条目承载，清除可能随迁的本地显示名避免两处命名分叉。
+		_ = b.Store.SetAccountDisplayName(acct.Key, "")
 		return acct, nil
 	}
 
@@ -834,6 +865,15 @@ func (b *Biz) changeAccountType(ctx context.Context, key string, in AccountInput
 		created = append(created, keyAccountFrom(newDef, e))
 	}
 	b.migrateAccountState(key, created, migrate)
+	// 首个条目延续命名：输入名称 > 旧显示名；其余条目回落主机名。
+	displayName := strings.TrimSpace(in.Name)
+	if displayName == "" {
+		displayName = oldName
+	}
+	if displayName != "" {
+		_ = b.Store.SetAccountDisplayName(created[0].Key, displayName)
+		created[0].Name = displayName
+	}
 	return created[0], nil
 }
 
@@ -1032,6 +1072,9 @@ func (b *Biz) GetAccount(ctx context.Context, key string) (Account, []string, er
 			a := keyAccountFrom(def, entry)
 			if uas, err := b.Store.AccountUserAgents(); err == nil {
 				a.UA = uas[a.Key]
+			}
+			if dns, err := b.Store.AccountDisplayNames(); err == nil && dns[a.Key] != "" {
+				a.Name = dns[a.Key]
 			}
 			var names []string
 			for _, m := range keyEntryModels(ctx, c, def, entry) {

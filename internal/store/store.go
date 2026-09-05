@@ -105,7 +105,11 @@ CREATE TABLE IF NOT EXISTS account_settings (
 		return err
 	}
 	// 账号级 User-Agent：控制台探测上游时使用，覆盖设置页默认 UA（仅存控制台，不写入 CPA）。
-	return s.ensureColumn("account_settings", "ua", "TEXT NOT NULL DEFAULT ''")
+	if err := s.ensureColumn("account_settings", "ua", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// 控制台显示名：CPA 条目无 name 字段的类型（codex 等）用它保存用户命名的名称。
+	return s.ensureColumn("account_settings", "display_name", "TEXT NOT NULL DEFAULT ''")
 }
 
 // ensureColumn 为旧库补列（幂等）。
@@ -670,6 +674,33 @@ func (s *Store) SetAccountUserAgent(accountKey, ua string) error {
 	return err
 }
 
+// AccountDisplayNames 返回各账号的控制台显示名（未命名的账号不在结果中）。
+func (s *Store) AccountDisplayNames() (map[string]string, error) {
+	rows, err := s.DB.Query(`SELECT account_key, display_name FROM account_settings WHERE display_name != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, name string
+		if err := rows.Scan(&k, &name); err != nil {
+			return nil, err
+		}
+		out[k] = name
+	}
+	return out, rows.Err()
+}
+
+// SetAccountDisplayName 写入控制台显示名（空串表示清除，回落到 CPA 条目名称或主机名）。
+// 新建行 auto_sync 取 0：符合「新账号默认不参与周期自动同步」的当前策略。
+func (s *Store) SetAccountDisplayName(accountKey, name string) error {
+	_, err := s.DB.Exec(
+		`INSERT INTO account_settings(account_key, auto_sync, display_name) VALUES(?, 0, ?)
+		ON CONFLICT(account_key) DO UPDATE SET display_name = excluded.display_name`, accountKey, name)
+	return err
+}
+
 // RenameAccountSetting 账号标识变更时迁移配置（旧标识不存在则不做任何事）。
 func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 	tx, err := s.DB.Begin()
@@ -678,8 +709,8 @@ func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 	}
 	defer tx.Rollback()
 	var autoSync int
-	var grp, tags, ua string
-	err = tx.QueryRow(`SELECT auto_sync, grp, tags, ua FROM account_settings WHERE account_key = ?`, oldKey).Scan(&autoSync, &grp, &tags, &ua)
+	var grp, tags, ua, displayName string
+	err = tx.QueryRow(`SELECT auto_sync, grp, tags, ua, display_name FROM account_settings WHERE account_key = ?`, oldKey).Scan(&autoSync, &grp, &tags, &ua, &displayName)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -687,9 +718,9 @@ func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO account_settings(account_key, auto_sync, grp, tags, ua) VALUES(?, ?, ?, ?, ?)
-		ON CONFLICT(account_key) DO UPDATE SET auto_sync = excluded.auto_sync, grp = excluded.grp, tags = excluded.tags, ua = excluded.ua`,
-		newKey, autoSync, grp, tags, ua); err != nil {
+		`INSERT INTO account_settings(account_key, auto_sync, grp, tags, ua, display_name) VALUES(?, ?, ?, ?, ?, ?)
+		ON CONFLICT(account_key) DO UPDATE SET auto_sync = excluded.auto_sync, grp = excluded.grp, tags = excluded.tags, ua = excluded.ua, display_name = excluded.display_name`,
+		newKey, autoSync, grp, tags, ua, displayName); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM account_settings WHERE account_key = ?`, oldKey); err != nil {

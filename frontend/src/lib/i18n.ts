@@ -79,6 +79,7 @@ const dict: Record<string, string> = {
   'accounts.dialog.typeChangeHint': '保存后将按新类型重建账号：Key 与设置随迁，模型审批状态需重新同步发现',
   'accounts.dialog.name': '账号名称',
   'accounts.dialog.nameHint': 'OpenAI 兼容账号必填，作为唯一标识',
+  'accounts.dialog.nameHintLocal': '仅存本控制台的显示名（CPA 此类型不保存名称），留空显示地址主机名',
   'accounts.dialog.apiKey': 'API Key',
   'accounts.dialog.apiKeyEditHint': '留空表示不修改',
   'accounts.dialog.keysPlaceholder': '每行一个 API Key',

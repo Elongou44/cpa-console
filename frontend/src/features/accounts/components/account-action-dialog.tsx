@@ -105,7 +105,7 @@ export function AccountActionDialog({
   useEffect(() => {
     if (!open) return
     setType(account?.type ?? 'openai-compatibility')
-    setName(account?.type === 'openai-compatibility' ? account.name : '')
+    setName(account?.name ?? '')
     setKeysText('')
     setBaseUrl(account?.baseUrl ?? '')
     setGroup(account?.group ?? '')
@@ -308,16 +308,16 @@ export function AccountActionDialog({
             {/* 字段区 */}
             <div className="min-h-0 flex-1 overflow-y-auto md:pr-1">
               <div className="grid gap-x-6 gap-y-4 md:grid-cols-2">
-          {isCompat && (
-            <div className="space-y-1.5">
-              <Label>
-                {t('accounts.dialog.name')}
-                <span className="ml-1 text-destructive">*</span>
-              </Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-provider" />
-              <p className="text-xs text-muted-foreground">{t('accounts.dialog.nameHint')}</p>
-            </div>
-          )}
+          <div className="space-y-1.5">
+            <Label>
+              {t('accounts.dialog.name')}
+              {isCompat && <span className="ml-1 text-destructive">*</span>}
+            </Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={isCompat ? 'my-provider' : 'my-codex'} />
+            <p className="text-xs text-muted-foreground">
+              {isCompat ? t('accounts.dialog.nameHint') : t('accounts.dialog.nameHintLocal')}
+            </p>
+          </div>
 
           <div className="space-y-1.5 md:col-span-2">
             <div className="flex items-center justify-between">
