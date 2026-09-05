@@ -255,6 +255,11 @@ func (s *Store) PendingCountsByAccount() (map[string]int, error) {
 	return s.countsByAccount(`SELECT account_key, COUNT(*) FROM model_status WHERE status = 'pending' GROUP BY account_key`)
 }
 
+// ApprovedCountsByAccount 统计各账号已放行（启用）模型数。
+func (s *Store) ApprovedCountsByAccount() (map[string]int, error) {
+	return s.countsByAccount(`SELECT account_key, COUNT(*) FROM model_status WHERE status = 'approved' GROUP BY account_key`)
+}
+
 func (s *Store) countsByAccount(query string) (map[string]int, error) {
 	rows, err := s.DB.Query(query)
 	if err != nil {

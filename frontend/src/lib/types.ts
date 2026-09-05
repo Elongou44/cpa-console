@@ -21,6 +21,7 @@ export interface Account {
   priority?: number
   ua?: string
   modelCount: number
+  approvedCount: number
   pendingCount: number
   excludedCount: number
   successCount: number

@@ -64,6 +64,7 @@ type Account struct {
 	Priority      int    `json:"priority"`           // 路由优先级，写入 CPA 条目的 priority 字段
 	UA            string `json:"ua,omitempty"`       // 账号级 User-Agent，仅存控制台，覆盖默认 UA
 	ModelCount    int    `json:"modelCount"`
+	ApprovedCount int    `json:"approvedCount"` // 已放行（启用）模型数
 	PendingCount  int    `json:"pendingCount"`
 	ExcludedCount int    `json:"excludedCount"`
 	SuccessCount  int64  `json:"successCount"`
@@ -352,6 +353,7 @@ func (b *Biz) ListAccounts(ctx context.Context, q, status, typ string) ([]Accoun
 		return nil, err
 	}
 	modelCounts, _ := b.Store.ModelCountsByAccount()
+	approvedCounts, _ := b.Store.ApprovedCountsByAccount()
 	pendingCounts, _ := b.Store.PendingCountsByAccount()
 	blockedCounts, _ := b.Store.BlockedCountsByAccount()
 	autoSyncOff, _ := b.Store.AutoSyncDisabledAccounts()
@@ -368,6 +370,7 @@ func (b *Biz) ListAccounts(ctx context.Context, q, status, typ string) ([]Accoun
 	}
 	for _, a := range snap.Accounts {
 		a.ModelCount = modelCounts[a.Key]
+		a.ApprovedCount = approvedCounts[a.Key]
 		a.PendingCount = pendingCounts[a.Key]
 		a.AutoSync = !autoSyncOff[a.Key]
 		a.Group = groups[a.Key]
@@ -485,6 +488,8 @@ func (b *Biz) CreateAccount(ctx context.Context, in AccountInput) (Account, erro
 	_ = b.Store.SetAccountGroup(acct.Key, strings.TrimSpace(in.Group))
 	_ = b.Store.SetAccountTags(acct.Key, normalizeTags(in.Tags))
 	_ = b.Store.SetAccountUserAgent(acct.Key, strings.TrimSpace(in.UA))
+	// 新账号默认不参与周期自动同步（手动「立即同步」不受影响），确认可用后再在列表开启。
+	_ = b.Store.SetAutoSync(acct.Key, false)
 	return acct, nil
 }
 

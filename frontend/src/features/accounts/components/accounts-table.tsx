@@ -106,7 +106,15 @@ export function AccountsTable({ accounts, actions }: { accounts: Account[]; acti
               </TableCell>
               <TableCell className="text-right">
                 <div className="flex items-center justify-end gap-1.5">
-                  <span className="font-mono text-sm tabular-nums">{account.modelCount}</span>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="cursor-default font-mono text-sm tabular-nums">
+                        {account.approvedCount}
+                        <span className="text-muted-foreground">/ {account.modelCount}</span>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>{t('accounts.modelsCountTip')}</TooltipContent>
+                  </Tooltip>
                   {account.pendingCount > 0 && (
                     <Badge variant="warning" className="cursor-pointer" onClick={() => actions.onReview(account)}>
                       {t('accounts.pendingBadge', { count: account.pendingCount })}

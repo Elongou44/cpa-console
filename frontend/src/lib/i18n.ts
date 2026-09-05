@@ -62,6 +62,7 @@ const dict: Record<string, string> = {
   'accounts.autoSyncOff': '已关闭自动同步，后台不再处理该账号',
   'accounts.columns.actions': '操作',
   'accounts.pendingBadge': '{count} 待审',
+  'accounts.modelsCountTip': '已启用 / 发现模型：已放行数 ÷ 上次同步发现的上游模型总数',
   'accounts.review': '模型审批',
   'accounts.enable': '启用',
   'accounts.disable': '禁用',
