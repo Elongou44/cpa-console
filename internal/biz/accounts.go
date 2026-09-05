@@ -1324,9 +1324,59 @@ func (b *Biz) probeUpstream(ctx context.Context, typ, apiKey, base, ua string) (
 			return nil, err
 		}
 		return cpa.ExtractModelNames(parsed), nil
+	case "codex":
+		// Codex 协议：GET {base}/models（默认官方 Codex 后端），
+		// 响应为 {"models":[{"slug":..}]}；兼容部分中转的 OpenAI 风格 {"data":[{"id":..}]}。
+		if base == "" {
+			base = "https://chatgpt.com/backend-api/codex"
+		}
+		data, err := probe(pctx, trimVersionSuffix(base)+"/models", map[string]string{"Authorization": "Bearer " + apiKey}, ua)
+		if err != nil {
+			return nil, err
+		}
+		names := extractCodexModelNames(data)
+		if len(names) == 0 {
+			return nil, fmt.Errorf("上游未返回模型列表")
+		}
+		return names, nil
 	default:
 		return nil, fmt.Errorf("该账号类型暂不支持自动获取模型，请手动维护模型列表")
 	}
+}
+
+// extractCodexModelNames 解析 Codex 上游 /models 响应，兼容 Codex 原生（models[].slug）与 OpenAI 风格（data[].id）。
+func extractCodexModelNames(data []byte) []string {
+	var body struct {
+		Models []struct {
+			Slug string `json:"slug"`
+			ID   string `json:"id"`
+		} `json:"models"`
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := unmarshal(data, &body); err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(n string) {
+		if n = strings.TrimSpace(n); n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	for _, m := range body.Models {
+		n := m.Slug
+		if n == "" {
+			n = m.ID
+		}
+		add(n)
+	}
+	for _, m := range body.Data {
+		add(m.ID)
+	}
+	return out
 }
 
 func normalizeModelNames(names []string, prefix string) []string {

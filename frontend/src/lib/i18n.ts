@@ -98,6 +98,8 @@ const dict: Record<string, string> = {
   'accounts.dialog.modelsHint': '保存后所选模型直接放行生效，无需审批',
   'accounts.dialog.dup': '{name} 已存在',
   'accounts.dialog.suggestions': '上游可用模型（点击添加 / 移除）',
+  'accounts.dialog.suggestionsView': '上游可用模型（预览）',
+  'accounts.dialog.modelsHintLocal': '模型由同步自动发现，进入待审批后放行；「获取模型」仅预览上游清单',
   'accounts.dialog.suggestionsEmpty': '点击「获取模型」拉取上游候选，按家族分组点选添加',
   'accounts.dialog.groupAll': '全选',
   'accounts.dialog.groupClear': '清除',

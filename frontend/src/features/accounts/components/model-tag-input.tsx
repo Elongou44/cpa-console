@@ -105,7 +105,8 @@ export function ModelTagInput({ value, onChange }: { value: string[]; onChange: 
   )
 }
 
-/** 上游候选模型面板：获取模型、按家族分组点选、搜索过滤；嵌入右侧栏时占满高度内部滚动。 */
+/** 上游候选模型面板：获取模型、按家族分组点选、搜索过滤；嵌入右侧栏时占满高度内部滚动。
+ *  readOnly 用于无路由清单的类型（codex 等）：仅预览上游清单，不可点选。 */
 export function ModelSuggestionsPanel({
   value,
   onChange,
@@ -114,6 +115,7 @@ export function ModelSuggestionsPanel({
   fetching,
   embedded,
   onClose,
+  readOnly,
 }: {
   value: string[]
   onChange: (next: string[]) => void
@@ -125,6 +127,8 @@ export function ModelSuggestionsPanel({
   embedded?: boolean
   /** 右侧栏收起按钮（传入才显示）。 */
   onClose?: () => void
+  /** 预览模式：候选不可点选（该类型模型由同步发现后审批）。 */
+  readOnly?: boolean
 }) {
   const [filter, setFilter] = useState('')
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
@@ -159,6 +163,17 @@ export function ModelSuggestionsPanel({
   const renderChips = (items: string[]) =>
     items.map((s) => {
       const selected = value.includes(s)
+      if (readOnly) {
+        return (
+          <span
+            key={s}
+            className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 font-mono text-xs text-muted-foreground"
+            title={s}
+          >
+            <span className="truncate">{s}</span>
+          </span>
+        )
+      }
       return (
         <button
           type="button"
@@ -182,7 +197,7 @@ export function ModelSuggestionsPanel({
     <div className={cn('space-y-2', embedded && 'flex h-full min-h-0 flex-col')}>
       <div className="flex shrink-0 items-center justify-between gap-2">
         <span className="text-xs font-medium text-muted-foreground">
-          {t('accounts.dialog.suggestions')}
+          {t(readOnly ? 'accounts.dialog.suggestionsView' : 'accounts.dialog.suggestions')}
           {suggestions.length > 0 && <span> · {suggestions.length}</span>}
         </span>
         <div className="flex shrink-0 items-center gap-1">
@@ -230,13 +245,15 @@ export function ModelSuggestionsPanel({
                       <span className="truncate text-xs font-medium">{name}</span>
                       <span className="text-xs tabular-nums text-muted-foreground">{models.length}</span>
                     </button>
-                    <button
-                      type="button"
-                      className="cursor-pointer text-xs text-muted-foreground transition-colors hover:text-foreground"
-                      onClick={() => setMany(models, !allSelected)}
-                    >
-                      {allSelected ? t('accounts.dialog.groupClear') : t('accounts.dialog.groupAll')}
-                    </button>
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        className="cursor-pointer text-xs text-muted-foreground transition-colors hover:text-foreground"
+                        onClick={() => setMany(models, !allSelected)}
+                      >
+                        {allSelected ? t('accounts.dialog.groupClear') : t('accounts.dialog.groupAll')}
+                      </button>
+                    )}
                   </div>
                   {open && <div className="flex flex-wrap gap-1.5 px-2 pb-2">{renderChips(models)}</div>}
                 </div>
@@ -263,7 +280,7 @@ export function ModelSuggestionsPanel({
         </div>
       )}
 
-      {hasPending && <p className="shrink-0 text-xs text-muted-foreground">{t('accounts.dialog.modelsHint')}</p>}
+      {!readOnly && hasPending && <p className="shrink-0 text-xs text-muted-foreground">{t('accounts.dialog.modelsHint')}</p>}
     </div>
   )
 }

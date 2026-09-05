@@ -418,22 +418,26 @@ export function AccountActionDialog({
             <p className="text-xs text-muted-foreground">{t('accounts.dialog.uaHint')}</p>
           </div>
 
-          {isCompat && (
-            <div className="space-y-1.5 md:col-span-2">
-              <div className="flex items-center justify-between">
-                <Label>{t('accounts.dialog.models')}</Label>
-                <button
-                  type="button"
-                  className="inline-flex cursor-pointer items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                  onClick={fetchAndShowModels}
-                >
-                  {fetchModelsMutation.isPending ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
-                  {t('accounts.dialog.fetchModels')}
-                </button>
-              </div>
-              <ModelTagInput value={models} onChange={setModels} />
+          <div className="space-y-1.5 md:col-span-2">
+            <div className="flex items-center justify-between">
+              <Label>{t('accounts.dialog.models')}</Label>
+              <button
+                type="button"
+                className="inline-flex cursor-pointer items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                onClick={fetchAndShowModels}
+              >
+                {fetchModelsMutation.isPending ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
+                {t('accounts.dialog.fetchModels')}
+              </button>
             </div>
-          )}
+            {isCompat ? (
+              <ModelTagInput value={models} onChange={setModels} />
+            ) : (
+              <p className="rounded-lg border border-dashed p-2.5 text-xs text-muted-foreground">
+                {t('accounts.dialog.modelsHintLocal')}
+              </p>
+            )}
+          </div>
               </div>
             </div>
           </div>
@@ -503,25 +507,24 @@ export function AccountActionDialog({
               )}
             </div>
 
-            {/* 候选模型面板（仅 OpenAI 兼容） */}
-            {isCompat && (
-              <div
-                className={cn(
-                  'flex h-full min-h-0 w-full flex-col transition-opacity duration-200',
-                  panel === 'models' ? 'opacity-100' : 'pointer-events-none absolute inset-x-0 top-0 opacity-0',
-                )}
-              >
-                <ModelSuggestionsPanel
-                  embedded
-                  value={models}
-                  onChange={setModels}
-                  suggestions={suggestions}
-                  onFetch={fetchModels}
-                  fetching={fetchModelsMutation.isPending}
-                  onClose={() => setPanel(null)}
-                />
-              </div>
-            )}
+            {/* 候选模型面板（兼容型可点选加入路由清单，其余类型仅预览） */}
+            <div
+              className={cn(
+                'flex h-full min-h-0 w-full flex-col transition-opacity duration-200',
+                panel === 'models' ? 'opacity-100' : 'pointer-events-none absolute inset-x-0 top-0 opacity-0',
+              )}
+            >
+              <ModelSuggestionsPanel
+                embedded
+                readOnly={!isCompat}
+                value={models}
+                onChange={setModels}
+                suggestions={suggestions}
+                onFetch={fetchModels}
+                fetching={fetchModelsMutation.isPending}
+                onClose={() => setPanel(null)}
+              />
+            </div>
           </div>
         </div>
 
