@@ -29,6 +29,13 @@ import { ChangesTimeline } from './components/changes-timeline'
 /** 全量拉取（无服务端过滤条件），筛选全部在客户端完成。 */
 const ALL_FILTERS: ModelFilters = {}
 
+/** 清理弹窗中模型徽章的审批状态文案 key。 */
+const STATUS_LABEL: Record<ReviewStatus, string> = {
+  pending: 'review.pending',
+  approved: 'review.approved',
+  rejected: 'review.rejected',
+}
+
 /** 模型审批中心 + 模型库。 */
 export default function ModelsPage() {
   const [inputQ, setInputQ] = useState('')
@@ -63,7 +70,18 @@ export default function ModelsPage() {
     for (const r of rows) map.set(r.accountKey, r.accountName)
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]))
   }, [rows])
-  const unavailableCount = useMemo(() => rows.filter((r) => !r.available).length, [rows])
+  // 不可用记录按账号分组，供清理确认弹窗逐条展示
+  const unavailableByAccount = useMemo(() => {
+    const map = new Map<string, ModelStatusRow[]>()
+    for (const r of rows) {
+      if (r.available) continue
+      const list = map.get(r.accountKey) ?? []
+      list.push(r)
+      map.set(r.accountKey, list)
+    }
+    return [...map.values()].sort((a, b) => a[0].accountName.localeCompare(b[0].accountName))
+  }, [rows])
+  const unavailableCount = unavailableByAccount.reduce((n, items) => n + items.length, 0)
   const cleanupMutation = useCleanupUnavailable()
   const pending = useMemo(() => filtered.filter((r) => r.status === 'pending'), [filtered])
   const approved = useMemo(() => filtered.filter((r) => r.status === 'approved'), [filtered])
@@ -157,6 +175,34 @@ export default function ModelsPage() {
                   <AlertDialogTitle>{t('models.cleanupTitle')}</AlertDialogTitle>
                   <AlertDialogDescription>{t('models.cleanupDesc', { count: unavailableCount })}</AlertDialogDescription>
                 </AlertDialogHeader>
+                <div className="max-h-72 space-y-3 overflow-y-auto rounded-xl border bg-muted/40 p-3">
+                  {unavailableByAccount.map((items) => (
+                    <div key={items[0].accountKey} className="space-y-1.5">
+                      <div className="text-xs font-medium">
+                        {items[0].accountName}
+                        <span className="ml-1 text-muted-foreground">({items.length})</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {items.map((m) => (
+                          <span
+                            key={rowId(m)}
+                            className="inline-flex max-w-full items-center gap-1.5 rounded-full border bg-card px-2 py-0.5"
+                          >
+                            <span
+                              className={cn(
+                                'size-1.5 shrink-0 rounded-full',
+                                m.status === 'approved' ? 'bg-success' : m.status === 'pending' ? 'bg-warning' : 'bg-destructive',
+                              )}
+                            />
+                            <span className="max-w-64 truncate font-mono text-[11px]">{m.model}</span>
+                            <span className="shrink-0 text-[10px] text-muted-foreground">{t(STATUS_LABEL[m.status])}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs leading-relaxed text-muted-foreground">{t('models.cleanupHint')}</p>
                 <AlertDialogFooter>
                   <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
                   <AlertDialogAction onClick={() => cleanupMutation.mutate()}>{t('models.cleanupConfirm')}</AlertDialogAction>

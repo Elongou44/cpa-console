@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react'
-import { ClipboardPaste, Eye, EyeOff, Loader2 } from 'lucide-react'
+import { ChevronLeft, ClipboardPaste, Copy, Eye, EyeOff, Loader2, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { t } from '@/lib/i18n'
 import type { Account, AccountInput } from '@/lib/types'
@@ -89,6 +88,8 @@ export function AccountActionDialog({
   const [models, setModels] = useState<string[]>([])
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [showKey, setShowKey] = useState(false)
+  // 右侧栏当前展示内容：Key 面板 / 候选模型面板 / 收起；打开时弹窗整体加宽
+  const [panel, setPanel] = useState<'key' | 'models' | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -103,6 +104,7 @@ export function AccountActionDialog({
     setModels([])
     setSuggestions([])
     setShowKey(false)
+    setPanel(null)
   }, [open, account])
 
   // 编辑时回填当前模型列表。
@@ -188,37 +190,75 @@ export function AccountActionDialog({
 
   const isCompat = type === 'openai-compatibility'
 
+  const copyKey = async () => {
+    try {
+      await navigator.clipboard.writeText(apiKey)
+      toast.success(t('common.copySuccess'))
+    } catch {
+      toast.error(t('accounts.dialog.clipboardDenied'))
+    }
+  }
+
+  // 点眼睛查看 Key 时右侧栏同步滑出；收起眼睛时若停在 Key 面板则一并收起
+  const toggleKey = () => {
+    const next = !showKey
+    setShowKey(next)
+    if (next) setPanel('key')
+    else setPanel((p) => (p === 'key' ? null : p))
+  }
+
+  const fetchAndShowModels = () => {
+    setPanel('models')
+    fetchModels()
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={cn('max-h-[90vh] overflow-y-auto', isCompat ? 'sm:max-w-5xl' : 'sm:max-w-4xl')}>
-        <DialogHeader>
+      <DialogContent
+        className={cn(
+          'flex max-h-[90vh] flex-col gap-4 overflow-hidden transition-all duration-300',
+          panel ? 'sm:max-w-6xl' : 'sm:max-w-4xl',
+        )}
+      >
+        <DialogHeader className="shrink-0 text-left">
           <DialogTitle>{isEdit ? t('accounts.dialog.editTitle') : t('accounts.dialog.addTitle')}</DialogTitle>
           <DialogDescription>{t('accounts.dialog.description')}</DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
-        <div className="grid gap-x-6 gap-y-4 md:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label>{t('accounts.dialog.type')}</Label>
-            {isEdit ? (
-              <div className="flex h-8 items-center text-sm text-muted-foreground">
-                {KEY_TYPES.find((x) => x.value === type)?.label ?? type}
+        <div className="flex min-h-0 flex-1 overflow-hidden md:gap-4">
+          {/* 左侧表单区：类型列 + 字段 */}
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden py-1 transition-all duration-300 md:flex-row md:gap-6">
+            {/* 账号类型：竖排单选卡片（编辑时锁定） */}
+            <div className="flex w-full shrink-0 flex-col gap-2 md:w-56">
+              <Label className="shrink-0 text-base font-semibold">{t('accounts.dialog.type')}</Label>
+              <div className="flex max-h-44 gap-2 overflow-x-auto pb-1 md:max-h-none md:flex-1 md:flex-col md:overflow-y-auto md:overflow-x-visible md:pb-0 md:pr-1">
+                {KEY_TYPES.map((x) => (
+                  <button
+                    type="button"
+                    key={x.value}
+                    disabled={isEdit}
+                    onClick={() => setType(x.value)}
+                    className={cn(
+                      'flex shrink-0 items-center gap-2.5 rounded-lg border p-3 text-sm transition-colors md:w-full',
+                      isEdit ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-accent/50',
+                      type === x.value && 'border-primary bg-accent/40 shadow-sm',
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'size-2 shrink-0 rounded-full border',
+                        type === x.value ? 'border-primary bg-primary' : 'border-muted-foreground/60',
+                      )}
+                    />
+                    <span className="whitespace-nowrap">{x.label}</span>
+                  </button>
+                ))}
               </div>
-            ) : (
-              <Select value={type} onValueChange={setType}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {KEY_TYPES.map((x) => (
-                    <SelectItem key={x.value} value={x.value}>
-                      {x.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
+            </div>
+
+            {/* 字段区 */}
+            <div className="min-h-0 flex-1 overflow-y-auto md:pr-1">
+              <div className="grid gap-x-6 gap-y-4 md:grid-cols-2">
 
           {isCompat && (
             <div className="space-y-1.5">
@@ -258,7 +298,7 @@ export function AccountActionDialog({
               <button
                 type="button"
                 className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
-                onClick={() => setShowKey((v) => !v)}
+                onClick={toggleKey}
               >
                 {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
               </button>
@@ -327,26 +367,82 @@ export function AccountActionDialog({
 
           {isCompat && (
             <div className="space-y-1.5 md:col-span-2">
-              <Label>{t('accounts.dialog.models')}</Label>
+              <div className="flex items-center justify-between">
+                <Label>{t('accounts.dialog.models')}</Label>
+                <button
+                  type="button"
+                  className="inline-flex cursor-pointer items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                  onClick={fetchAndShowModels}
+                >
+                  {fetchModelsMutation.isPending ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
+                  {t('accounts.dialog.fetchModels')}
+                </button>
+              </div>
               <ModelTagInput value={models} onChange={setModels} />
             </div>
           )}
+              </div>
+            </div>
+          </div>
+
+          {/* 右侧栏：查看 Key / 候选模型时滑出，弹窗同步加宽 */}
+          <div
+            className={cn(
+              'relative flex min-h-0 flex-col overflow-hidden pt-1.5 transition-all duration-300 ease-out',
+              panel ? 'w-[400px] border-l pl-4 opacity-100' : 'w-0 border-l border-l-transparent pl-0 opacity-0',
+            )}
+          >
+            {/* Key 面板 */}
+            <div
+              className={cn(
+                'flex h-full min-h-0 w-full flex-col transition-opacity duration-200',
+                panel === 'key' ? 'opacity-100' : 'pointer-events-none absolute inset-x-0 top-0 opacity-0',
+              )}
+            >
+              <div className="mb-3 flex shrink-0 items-center justify-between">
+                <h3 className="text-sm font-semibold">{t('accounts.dialog.keyPanelTitle')}</h3>
+                <Button type="button" variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setPanel(null)}>
+                  <ChevronLeft className="size-4" />
+                </Button>
+              </div>
+              {apiKey.trim() ? (
+                <>
+                  <p className="shrink-0 rounded-lg border bg-muted/30 p-3 font-mono text-xs break-all">{apiKey}</p>
+                  <Button type="button" variant="outline" size="sm" className="mt-2 h-7 w-fit shrink-0" onClick={copyKey}>
+                    <Copy className="size-3" />
+                    {t('common.copy')}
+                  </Button>
+                </>
+              ) : (
+                <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+                  {isEdit ? t('accounts.dialog.apiKeyEditHint') : t('accounts.dialog.keyPanelEmpty')}
+                </p>
+              )}
+            </div>
+
+            {/* 候选模型面板（仅 OpenAI 兼容） */}
+            {isCompat && (
+              <div
+                className={cn(
+                  'flex h-full min-h-0 w-full flex-col transition-opacity duration-200',
+                  panel === 'models' ? 'opacity-100' : 'pointer-events-none absolute inset-x-0 top-0 opacity-0',
+                )}
+              >
+                <ModelSuggestionsPanel
+                  embedded
+                  value={models}
+                  onChange={setModels}
+                  suggestions={suggestions}
+                  onFetch={fetchModels}
+                  fetching={fetchModelsMutation.isPending}
+                  onClose={() => setPanel(null)}
+                />
+              </div>
+            )}
+          </div>
         </div>
 
-        {isCompat && (
-          <aside className="self-start lg:sticky lg:top-0">
-            <ModelSuggestionsPanel
-              value={models}
-              onChange={setModels}
-              suggestions={suggestions}
-              onFetch={fetchModels}
-              fetching={fetchModelsMutation.isPending}
-            />
-          </aside>
-        )}
-        </div>
-
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t('common.cancel')}
           </Button>

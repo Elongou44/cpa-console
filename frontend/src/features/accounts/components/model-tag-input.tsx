@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Check, ChevronDown, Loader2, Plus, RefreshCw, Search, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronLeft, Loader2, Plus, RefreshCw, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -105,13 +105,15 @@ export function ModelTagInput({ value, onChange }: { value: string[]; onChange: 
   )
 }
 
-/** 上游候选模型侧栏面板：获取模型、按家族分组点选、搜索过滤。 */
+/** 上游候选模型面板：获取模型、按家族分组点选、搜索过滤；嵌入右侧栏时占满高度内部滚动。 */
 export function ModelSuggestionsPanel({
   value,
   onChange,
   suggestions = [],
   onFetch,
   fetching,
+  embedded,
+  onClose,
 }: {
   value: string[]
   onChange: (next: string[]) => void
@@ -119,6 +121,10 @@ export function ModelSuggestionsPanel({
   suggestions?: string[]
   onFetch?: () => void
   fetching?: boolean
+  /** 嵌入弹窗右侧栏：占满面板高度（列表内部滚动），否则限制最大高度。 */
+  embedded?: boolean
+  /** 右侧栏收起按钮（传入才显示）。 */
+  onClose?: () => void
 }) {
   const [filter, setFilter] = useState('')
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
@@ -127,6 +133,7 @@ export function ModelSuggestionsPanel({
   const keyword = filter.trim().toLowerCase()
   const visibleSuggestions = keyword ? suggestions.filter((s) => s.toLowerCase().includes(keyword)) : suggestions
   const hasPending = suggestions.some((s) => !value.includes(s))
+  const listCls = embedded ? 'min-h-0 flex-1' : 'max-h-[26rem]'
 
   const groups = useMemo(() => {
     const map = new Map<string, string[]>()
@@ -172,22 +179,29 @@ export function ModelSuggestionsPanel({
     })
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
+    <div className={cn('space-y-2', embedded && 'flex h-full min-h-0 flex-col')}>
+      <div className="flex shrink-0 items-center justify-between gap-2">
         <span className="text-xs font-medium text-muted-foreground">
           {t('accounts.dialog.suggestions')}
           {suggestions.length > 0 && <span> · {suggestions.length}</span>}
         </span>
-        {onFetch && (
-          <Button type="button" variant="outline" size="sm" className="h-7 shrink-0" onClick={onFetch} disabled={fetching}>
-            {fetching ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
-            {t('accounts.dialog.fetchModels')}
-          </Button>
-        )}
+        <div className="flex shrink-0 items-center gap-1">
+          {onFetch && (
+            <Button type="button" variant="outline" size="sm" className="h-7" onClick={onFetch} disabled={fetching}>
+              {fetching ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
+              {t('accounts.dialog.fetchModels')}
+            </Button>
+          )}
+          {onClose && (
+            <Button type="button" variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={onClose}>
+              <ChevronLeft className="size-4" />
+            </Button>
+          )}
+        </div>
       </div>
 
       {suggestions.length > 8 && (
-        <div className="relative">
+        <div className="relative shrink-0">
           <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={filter}
@@ -200,7 +214,7 @@ export function ModelSuggestionsPanel({
 
       {suggestions.length > 0 || fetching ? (
         groups.length > 1 && !keyword ? (
-          <div className="grid max-h-[26rem] gap-1.5 overflow-y-auto pr-1">
+          <div className={cn('grid gap-1.5 overflow-y-auto pr-1', listCls)}>
             {groups.map(({ name, models }) => {
               const open = openGroups[name] ?? false
               const allSelected = models.every((m) => value.includes(m))
@@ -230,10 +244,16 @@ export function ModelSuggestionsPanel({
             })}
           </div>
         ) : (
-          <div className="flex max-h-[26rem] flex-wrap gap-1.5 overflow-y-auto pr-1">
+          <div className={cn('flex flex-wrap gap-1.5 overflow-y-auto pr-1', listCls)}>
             {renderChips(visibleSuggestions)}
             {visibleSuggestions.length === 0 && !fetching && (
               <span className="py-1 text-xs text-muted-foreground">{t('common.noData')}</span>
+            )}
+            {visibleSuggestions.length === 0 && fetching && (
+              <span className="inline-flex items-center gap-1.5 py-1 text-xs text-muted-foreground">
+                <Loader2 className="size-3 animate-spin" />
+                {t('accounts.dialog.fetching')}
+              </span>
             )}
           </div>
         )
@@ -243,7 +263,7 @@ export function ModelSuggestionsPanel({
         </div>
       )}
 
-      {hasPending && <p className="text-xs text-muted-foreground">{t('accounts.dialog.modelsHint')}</p>}
+      {hasPending && <p className="shrink-0 text-xs text-muted-foreground">{t('accounts.dialog.modelsHint')}</p>}
     </div>
   )
 }

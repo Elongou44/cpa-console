@@ -2,9 +2,10 @@
 
 本地运行的 CLIProxyAPI（CPA）账号管理控制台：Go (Gin) 单二进制内嵌 React 19 SPA，详见 `README.md`。
 
-## 发布与重启（工具化，不要手敲命令）
+## 提交与发布（构建重启仅按用户明确要求）
 
-改完前后端代码后，**统一使用根目录 `deploy.ps1` 完成构建、重启与提交**，不要手动执行散装命令：
+- **提交**：用户明确要求提交时直接 `git add` + `git commit`（中文说明概括改动）。用户没要求就不要自动 commit，也不要借提交之机构建、重启服务。
+- **构建/重启**：`deploy.ps1` 仅在用户明确要求「发布 / 部署 / 重启」时执行，改完代码后**不要自动构建重启**：
 
 ```powershell
 .\deploy.ps1                      # 全量发布：npm build -> 停旧实例 -> go build -> 重启 -> 健康检查
@@ -14,18 +15,17 @@
 
 要点：
 
-- `deploy.ps1` 会强制结束 `cpa-console.exe` / `air` / `cpa-console-dev` 进程后重启，Windows 下运行中的 exe 无法覆盖，先停后编是必须的。
+- `deploy.ps1` 会强制结束 `cpa-console.exe` / `air` / `cpa-console-dev` 进程后重启（Windows 下运行中的 exe 无法覆盖，先停后编是必须的），因此开发模式期间擅自发布会杀掉 air 热重载后端。
 - 前端 `dist/` 通过 embed 打进二进制，**npm run build 必须先于 go build**；只改 Go 时才可用 `-SkipFrontend`。
 - 脚本以 UTF-8 BOM 保存（PowerShell 5.1 兼容），修改后若出现中文乱码/解析错误，先检查 BOM 是否丢失。
-- 提交仅通过 `-Message` 显式触发；不要在脚本外替用户自动 commit。
 
-## 开发模式（热更新）
+## 开发模式（热更新，日常默认）
 
-日常调试用 `dev.bat`：新窗口 `npm run dev`（:5173，/api 代理到 8790）+ air 热重载后端（:8790）。改 `.go` 自动重建重启，改前端即时生效，全程免手动发布。
+日常开发用 `dev.bat`：新窗口 `npm run dev`（:5173，/api 代理到 8790）+ air 热重载后端（:8790）。改 `.go` 自动重建重启，改前端即时生效，无需任何手动发布。这是默认工作流：改完代码即生效，构建、重启、提交都等用户明确要求。
 
 ## 验证标准
 
-- 前端：`npm run build` 内含 `tsc -b`，类型错误会在构建期暴露；改完 TS/TSX 至少跑一次全量 `deploy.ps1`。
+- 前端：`npm run build` 内含 `tsc -b`，类型错误会在构建期暴露（vite 热更新不做类型检查）；需要类型检查时直接跑它——纯构建检查、不动运行中的服务，不要为此执行 `deploy.ps1`。
 - 后端：`go build ./...`；`internal/biz` 下的纯逻辑（如别名规则）配套 `_test.go`，改动时用 `go test ./internal/biz/` 验证。
 - 发布完成的判定：脚本输出 `http://localhost:8790 已就绪`（健康检查 200）。
 
@@ -64,9 +64,9 @@
 
 ### 典型任务速查
 
-- 「加个接口并在页面用」：`handlers.go` → `biz/*.go` → 前端 `hooks.ts` → 组件 → `types.ts` 同步字段 → `deploy.ps1` 全量发布。
-- 「改某个弹窗/表格样式」：直接进对应 `features/*/components/`，改完 `deploy.ps1`。
-- 「只改后端逻辑」：改 `biz/` → `deploy.ps1 -SkipFrontend`；纯规则类逻辑先补 `go test`。
+- 「加个接口并在页面用」：`handlers.go` → `biz/*.go` → 前端 `hooks.ts` → 组件 → `types.ts` 同步字段；开发模式热生效，提交/发布等用户要求。
+- 「改某个弹窗/表格样式」：直接进对应 `features/*/components/`，保存即热生效。
+- 「只改后端逻辑」：改 `biz/`，air 自动重建；纯规则类逻辑先补 `go test`。
 
 ## 结果语义与安全
 
