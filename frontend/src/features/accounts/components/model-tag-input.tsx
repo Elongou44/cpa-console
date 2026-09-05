@@ -229,7 +229,7 @@ export function ModelSuggestionsPanel({
 
       {suggestions.length > 0 || fetching ? (
         groups.length > 1 && !keyword ? (
-          <div className={cn('grid gap-1.5 overflow-y-auto pr-1', listCls)}>
+          <div className={cn('grid content-start gap-1.5 overflow-y-auto pr-1', listCls)}>
             {groups.map(({ name, models }) => {
               const open = openGroups[name] ?? false
               const allSelected = models.every((m) => value.includes(m))
@@ -261,7 +261,7 @@ export function ModelSuggestionsPanel({
             })}
           </div>
         ) : (
-          <div className={cn('flex flex-wrap gap-1.5 overflow-y-auto pr-1', listCls)}>
+          <div className={cn('flex content-start flex-wrap gap-1.5 overflow-y-auto pr-1', listCls)}>
             {renderChips(visibleSuggestions)}
             {visibleSuggestions.length === 0 && !fetching && (
               <span className="py-1 text-xs text-muted-foreground">{t('common.noData')}</span>

@@ -1353,17 +1353,28 @@ func (b *Biz) probeUpstream(ctx context.Context, typ, apiKey, base, ua string) (
 		}
 		return cpa.ExtractModelNames(parsed), nil
 	case "codex":
-		// Codex 协议：GET {base}/models（默认官方 Codex 后端），
-		// 响应为 {"models":[{"slug":..}]}；兼容部分中转的 OpenAI 风格 {"data":[{"id":..}]}。
+		// 依次尝试 Codex 协议路径 {base}/models 与 OpenAI 风格 {base}/v1/models（中转实现不一）；
+		// 响应兼容 Codex 原生 {"models":[{"slug":..}]} 与 OpenAI 风格 {"data":[{"id":..}]}。
 		if base == "" {
 			base = "https://chatgpt.com/backend-api/codex"
 		}
-		data, err := probe(pctx, trimVersionSuffix(base)+"/models", map[string]string{"Authorization": "Bearer " + apiKey}, ua)
-		if err != nil {
-			return nil, err
+		root := trimVersionSuffix(base)
+		var names []string
+		var lastErr error
+		for _, u := range []string{root + "/models", root + "/v1/models"} {
+			data, err := probe(pctx, u, map[string]string{"Authorization": "Bearer " + apiKey}, ua)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if names = extractCodexModelNames(data); len(names) > 0 {
+				return names, nil
+			}
 		}
-		names := extractCodexModelNames(data)
 		if len(names) == 0 {
+			if lastErr != nil {
+				return nil, lastErr
+			}
 			return nil, fmt.Errorf("上游未返回模型列表")
 		}
 		return names, nil
