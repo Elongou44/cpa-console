@@ -701,6 +701,33 @@ func (s *Store) SetAccountDisplayName(accountKey, name string) error {
 	return err
 }
 
+// MigrateAccountModels 账号身份变更（类型切换 / 改 Key）时迁移审批状态与模型快照：
+// 放行、拒绝、待审批状态原样保留（无需重新审批），与新身份已有记录冲突时保留新记录。
+func (s *Store) MigrateAccountModels(oldKey, newKey, newType, newName string) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO model_status(account_key, account_type, account_name, model_name, status, first_seen_at, updated_at, payload)
+		SELECT ?, ?, ?, model_name, status, first_seen_at, updated_at, payload FROM model_status WHERE account_key = ?
+		ON CONFLICT(account_key, model_name) DO NOTHING`, newKey, newType, newName, oldKey); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM model_status WHERE account_key = ?`, oldKey); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO account_models(account_key, account_type, account_name, model_name, alias, updated_at)
+		SELECT ?, ?, ?, model_name, alias, updated_at FROM account_models WHERE account_key = ?
+		ON CONFLICT(account_key, model_name) DO NOTHING`, newKey, newType, newName, oldKey); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM account_models WHERE account_key = ?`, oldKey); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // RenameAccountSetting 账号标识变更时迁移配置（旧标识不存在则不做任何事）。
 func (s *Store) RenameAccountSetting(oldKey, newKey string) error {
 	tx, err := s.DB.Begin()

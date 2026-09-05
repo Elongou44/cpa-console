@@ -48,35 +48,35 @@ func defByType(t string) (collectionDef, bool) {
 
 // Account 归一化后的账号（Key 型或 OAuth 凭据）。
 type Account struct {
-	Key           string `json:"key"`
-	Kind          string `json:"kind"` // key | oauth
-	Type          string `json:"type"`
-	Name          string `json:"name"`
-	APIKeyMasked  string `json:"apiKeyMasked,omitempty"`
-	KeyCount      int    `json:"keyCount"` // 账号内 Key 总数（openai-compatibility 多 Key 时 > 1）
-	BaseURL       string `json:"baseUrl,omitempty"`
-	Status        string `json:"status"` // enabled | disabled | error
-	Disabled      bool   `json:"disabled"`
-	AutoSync      bool   `json:"autoSync"` // 账号级自动同步开关（关闭后后台同步不处理该账号）
-	Provider      string `json:"provider,omitempty"` // OAuth 凭据所属 provider
-	AuthFile      string `json:"authFile,omitempty"` // OAuth 凭据文件名
-	Group         string `json:"group,omitempty"`    // 本地分组标记，仅存控制台，不写入 CPA
-	Tags          []string `json:"tags,omitempty"`   // 本地标签列表，同样仅存控制台
-	Priority      int    `json:"priority"`           // 路由优先级，写入 CPA 条目的 priority 字段
-	UA            string `json:"ua,omitempty"`       // 账号级 User-Agent，仅存控制台，覆盖默认 UA
-	ModelCount    int    `json:"modelCount"`
-	ApprovedCount int    `json:"approvedCount"` // 已放行（启用）模型数
-	PendingCount  int    `json:"pendingCount"`
-	ExcludedCount int    `json:"excludedCount"`
-	SuccessCount  int64  `json:"successCount"`
-	FailureCount  int64  `json:"failureCount"`
+	Key           string   `json:"key"`
+	Kind          string   `json:"kind"` // key | oauth
+	Type          string   `json:"type"`
+	Name          string   `json:"name"`
+	APIKeyMasked  string   `json:"apiKeyMasked,omitempty"`
+	KeyCount      int      `json:"keyCount"` // 账号内 Key 总数（openai-compatibility 多 Key 时 > 1）
+	BaseURL       string   `json:"baseUrl,omitempty"`
+	Status        string   `json:"status"` // enabled | disabled | error
+	Disabled      bool     `json:"disabled"`
+	AutoSync      bool     `json:"autoSync"`           // 账号级自动同步开关（关闭后后台同步不处理该账号）
+	Provider      string   `json:"provider,omitempty"` // OAuth 凭据所属 provider
+	AuthFile      string   `json:"authFile,omitempty"` // OAuth 凭据文件名
+	Group         string   `json:"group,omitempty"`    // 本地分组标记，仅存控制台，不写入 CPA
+	Tags          []string `json:"tags,omitempty"`     // 本地标签列表，同样仅存控制台
+	Priority      int      `json:"priority"`           // 路由优先级，写入 CPA 条目的 priority 字段
+	UA            string   `json:"ua,omitempty"`       // 账号级 User-Agent，仅存控制台，覆盖默认 UA
+	ModelCount    int      `json:"modelCount"`
+	ApprovedCount int      `json:"approvedCount"` // 已放行（启用）模型数
+	PendingCount  int      `json:"pendingCount"`
+	ExcludedCount int      `json:"excludedCount"`
+	SuccessCount  int64    `json:"successCount"`
+	FailureCount  int64    `json:"failureCount"`
 }
 
 // AccountInput 创建/编辑账号的输入。
 type AccountInput struct {
 	Type     string   `json:"type"`
-	APIKey   string   `json:"apiKey"`   // 单 Key 输入（兼容旧前端）
-	APIKeys  []string `json:"apiKeys"`  // 多 Key 输入：兼容型写入同一条目轮询，其余类型每个 Key 一个条目
+	APIKey   string   `json:"apiKey"`  // 单 Key 输入（兼容旧前端）
+	APIKeys  []string `json:"apiKeys"` // 多 Key 输入：兼容型写入同一条目轮询，其余类型每个 Key 一个条目
 	BaseURL  string   `json:"baseUrl"`
 	Name     string   `json:"name"`
 	Models   []string `json:"models"`
@@ -520,6 +520,12 @@ func buildEntry(def collectionDef, in AccountInput, keys []string) map[string]an
 // 多 Key 语义：openai-compatibility 全部写入同一条目的 api-key-entries（CPA 轮询使用）；
 // 其余类型一个条目一个 Key，多 Key 会创建多个条目（共享分组/标签/UA 设置）。
 func (b *Biz) CreateAccount(ctx context.Context, in AccountInput) (Account, error) {
+	// 创建期间与同步互斥：避免同步的「消失账号清理」把刚落库的放行状态误删。
+	ok, done := b.beginSyncExcl()
+	if !ok {
+		return Account{}, fmt.Errorf("同步正在进行中，请稍候")
+	}
+	defer done()
 	def, ok := defByType(in.Type)
 	if !ok {
 		return Account{}, fmt.Errorf("不支持的账号类型: %s", in.Type)
@@ -650,25 +656,40 @@ func (b *Biz) insertDiscoveryRecords(rows []store.AccountModel, defaultStatus fu
 
 // UpdateAccount 按 key 更新账号（空字段保持不变）。
 // 输入的 type 与现有类型不同时，切换为在目标类型集合中重建条目并迁移本地状态。
+// 全程与同步互斥：身份迁移期间同步的「消失账号清理」会把随迁的审批状态误删。
 func (b *Biz) UpdateAccount(ctx context.Context, key string, in AccountInput) (Account, error) {
 	typ, _, err := splitKey(key)
 	if err != nil {
 		return Account{}, err
 	}
+	ok, done := b.beginSyncExcl()
+	if !ok {
+		return Account{}, fmt.Errorf("同步正在进行中，请稍候")
+	}
+	acct, needEnforce, err := b.updateAccountLocked(ctx, key, typ, in)
+	done()
+	if err == nil && needEnforce {
+		// 锁释放后再触发收敛（enforceAfterReview 遇 syncing 忙会跳过）。
+		go b.enforceAfterReview()
+	}
+	return acct, err
+}
+
+func (b *Biz) updateAccountLocked(ctx context.Context, key, typ string, in AccountInput) (Account, bool, error) {
 	if in.Type != "" && in.Type != typ {
 		return b.changeAccountType(ctx, key, in)
 	}
 	def, ok := defByType(typ)
 	if !ok {
-		return Account{}, fmt.Errorf("不支持的账号类型: %s", typ)
+		return Account{}, false, fmt.Errorf("不支持的账号类型: %s", typ)
 	}
 	c, err := b.Client()
 	if err != nil {
-		return Account{}, err
+		return Account{}, false, err
 	}
 	items, err := c.GetKeyItems(ctx, def.Collection)
 	if err != nil {
-		return Account{}, err
+		return Account{}, false, err
 	}
 	idx := -1
 	for i, it := range items {
@@ -678,13 +699,13 @@ func (b *Biz) UpdateAccount(ctx context.Context, key string, in AccountInput) (A
 		}
 	}
 	if idx < 0 {
-		return Account{}, fmt.Errorf("账号不存在或标识已变更，请刷新后重试")
+		return Account{}, false, fmt.Errorf("账号不存在或标识已变更，请刷新后重试")
 	}
 	entry := items[idx]
 	// openai-compatibility：先做模型清单 diff（使用重命名前的身份）。
 	if def.Type == "openai-compatibility" && in.Models != nil {
 		if err := b.updateCompatModels(def, key, entry, in.Models); err != nil {
-			return Account{}, err
+			return Account{}, false, err
 		}
 	}
 	if keys := normalizeKeys(in.APIKeys, in.APIKey); len(keys) > 0 {
@@ -693,7 +714,7 @@ func (b *Biz) UpdateAccount(ctx context.Context, key string, in AccountInput) (A
 			setCompatKeys(entry, keys)
 		} else {
 			if len(keys) > 1 {
-				return Account{}, fmt.Errorf("该类型一个账号仅支持一个 Key，多 Key 请分别添加账号")
+				return Account{}, false, fmt.Errorf("该类型一个账号仅支持一个 Key，多 Key 请分别添加账号")
 			}
 			entry["api-key"] = keys[0]
 		}
@@ -714,15 +735,17 @@ func (b *Biz) UpdateAccount(ctx context.Context, key string, in AccountInput) (A
 	}
 	items[idx] = entry
 	if err := c.PutKeyItems(ctx, def.Collection, items); err != nil {
-		return Account{}, err
+		return Account{}, false, err
 	}
 	acct := keyAccountFrom(def, entry)
+	needEnforce := false
 	if acct.Key != key {
-		// API Key 变更导致标识变化：清除旧标识的本地状态，迁移账号级配置。
-		if removed, err := b.Store.DeleteByAccounts([]string{key}); err == nil && len(removed) > 0 {
-			_ = b.recordRemoved(removed)
+		// API Key 变更导致标识变化：审批状态随迁（无需重新审批），账号级配置迁移。
+		if err := b.Store.MigrateAccountModels(key, acct.Key, acct.Type, acct.Name); err != nil {
+			slog.Warn("迁移模型审批状态失败", "err", err)
 		}
 		_ = b.Store.RenameAccountSetting(key, acct.Key)
+		needEnforce = true
 	}
 	_ = b.Store.SetAccountGroup(acct.Key, strings.TrimSpace(in.Group))
 	_ = b.Store.SetAccountTags(acct.Key, normalizeTags(in.Tags))
@@ -730,36 +753,33 @@ func (b *Biz) UpdateAccount(ctx context.Context, key string, in AccountInput) (A
 	if def.Type != "openai-compatibility" {
 		// CPA 无 name 字段的类型：名称仅存控制台，空值清除后回落主机名显示。
 		_ = b.Store.SetAccountDisplayName(acct.Key, strings.TrimSpace(in.Name))
-		if n := strings.TrimSpace(in.Name); n != "" {
-			acct.Name = n
-		}
 	}
-	return acct, nil
+	return acct, needEnforce, nil
 }
 
 // changeAccountType 切换账号类型：在目标类型集合中重建条目并迁移本地状态。
 // Key 与 Base URL 随迁；目标为兼容型时全部 Key 写入同一条目，其余类型每个 Key 一个条目。
 // 审批状态无法跨类型沿用（模型集合语义不同），删除后由同步重新发现；账号级设置（分组/标签/UA/自动同步）迁移到新身份。
-func (b *Biz) changeAccountType(ctx context.Context, key string, in AccountInput) (Account, error) {
+func (b *Biz) changeAccountType(ctx context.Context, key string, in AccountInput) (Account, bool, error) {
 	oldType, _, err := splitKey(key)
 	if err != nil {
-		return Account{}, err
+		return Account{}, false, err
 	}
 	oldDef, ok := defByType(oldType)
 	if !ok {
-		return Account{}, fmt.Errorf("不支持的账号类型: %s", oldType)
+		return Account{}, false, fmt.Errorf("不支持的账号类型: %s", oldType)
 	}
 	newDef, ok := defByType(in.Type)
 	if !ok {
-		return Account{}, fmt.Errorf("不支持的账号类型: %s", in.Type)
+		return Account{}, false, fmt.Errorf("不支持的账号类型: %s", in.Type)
 	}
 	c, err := b.Client()
 	if err != nil {
-		return Account{}, err
+		return Account{}, false, err
 	}
 	oldItems, err := c.GetKeyItems(ctx, oldDef.Collection)
 	if err != nil {
-		return Account{}, err
+		return Account{}, false, err
 	}
 	idx := -1
 	for i, it := range oldItems {
@@ -769,7 +789,7 @@ func (b *Biz) changeAccountType(ctx context.Context, key string, in AccountInput
 		}
 	}
 	if idx < 0 {
-		return Account{}, fmt.Errorf("账号不存在或标识已变更，请刷新后重试")
+		return Account{}, false, fmt.Errorf("账号不存在或标识已变更，请刷新后重试")
 	}
 	oldEntry := oldItems[idx]
 
@@ -779,14 +799,14 @@ func (b *Biz) changeAccountType(ctx context.Context, key string, in AccountInput
 		keys = compatEntryAPIKeys(oldEntry)
 	}
 	if len(keys) == 0 {
-		return Account{}, fmt.Errorf("原账号没有可迁移的 API Key")
+		return Account{}, false, fmt.Errorf("原账号没有可迁移的 API Key")
 	}
 	base := strings.TrimSpace(in.BaseURL)
 	if base == "" {
 		base, _ = cpa.GetStr(oldEntry, "base-url", "baseUrl", "base_url")
 	}
 	if newDef.Type == "codex" && base == "" {
-		return Account{}, fmt.Errorf("Codex 账号必须填写 Base URL")
+		return Account{}, false, fmt.Errorf("Codex 账号必须填写 Base URL")
 	}
 
 	// 旧显示名：本地显示名 > CPA 条目 name；类型切换后用于延续命名。
@@ -813,39 +833,39 @@ func (b *Biz) changeAccountType(ctx context.Context, key string, in AccountInput
 			name = hostOf(base)
 		}
 		if base == "" {
-			return Account{}, fmt.Errorf("OpenAI 兼容账号必须填写 Base URL")
+			return Account{}, false, fmt.Errorf("OpenAI 兼容账号必须填写 Base URL")
 		}
 		migrate.Name = name
 		newItems, err := c.GetKeyItems(ctx, newDef.Collection)
 		if err != nil {
-			return Account{}, err
+			return Account{}, false, err
 		}
 		for _, it := range newItems {
 			if n, _ := cpa.GetStr(it, "name"); n == name {
-				return Account{}, fmt.Errorf("目标类型中已存在同名账号: %s", name)
+				return Account{}, false, fmt.Errorf("目标类型中已存在同名账号: %s", name)
 			}
 		}
 		entry := buildEntry(newDef, migrate, keys)
 		newItems = append(newItems, entry)
 		if err := c.PutKeyItems(ctx, newDef.Collection, newItems); err != nil {
-			return Account{}, err
+			return Account{}, false, err
 		}
 		// 新条目写入成功后再从旧集合移除，避免中途失败丢账号。
 		oldItems = append(oldItems[:idx], oldItems[idx+1:]...)
 		if err := c.PutKeyItems(ctx, oldDef.Collection, oldItems); err != nil {
-			return Account{}, err
+			return Account{}, false, err
 		}
 		acct := keyAccountFrom(newDef, entry)
 		b.migrateAccountState(key, []Account{acct}, migrate)
 		// 兼容型名称由 CPA 条目承载，清除可能随迁的本地显示名避免两处命名分叉。
 		_ = b.Store.SetAccountDisplayName(acct.Key, "")
-		return acct, nil
+		return acct, true, nil
 	}
 
 	// 其余类型：每个 Key 一个条目。
 	newItems, err := c.GetKeyItems(ctx, newDef.Collection)
 	if err != nil {
-		return Account{}, err
+		return Account{}, false, err
 	}
 	var entries []map[string]any
 	for _, k := range keys {
@@ -853,12 +873,12 @@ func (b *Biz) changeAccountType(ctx context.Context, key string, in AccountInput
 	}
 	newItems = append(newItems, entries...)
 	if err := c.PutKeyItems(ctx, newDef.Collection, newItems); err != nil {
-		return Account{}, err
+		return Account{}, false, err
 	}
 	// 新条目写入成功后再从旧集合移除，避免中途失败丢账号。
 	oldItems = append(oldItems[:idx], oldItems[idx+1:]...)
 	if err := c.PutKeyItems(ctx, oldDef.Collection, oldItems); err != nil {
-		return Account{}, err
+		return Account{}, false, err
 	}
 	created := make([]Account, 0, len(entries))
 	for _, e := range entries {
@@ -874,14 +894,15 @@ func (b *Biz) changeAccountType(ctx context.Context, key string, in AccountInput
 		_ = b.Store.SetAccountDisplayName(created[0].Key, displayName)
 		created[0].Name = displayName
 	}
-	return created[0], nil
+	return created[0], true, nil
 }
 
-// migrateAccountState 类型切换后的本地状态迁移：旧身份的审批状态删除（重新同步发现），
-// 账号级设置迁移到首个新身份，其余新身份按输入设置初始化（自动同步默认关闭）。
+// migrateAccountState 账号身份变更后的本地状态迁移：审批状态与模型快照随迁
+// （放行/拒绝/待审批原样保留，无需重新审批），账号级设置迁移到首个新身份，
+// 其余新身份按输入设置初始化（自动同步默认关闭）。最后触发收敛把随迁的放行模型写回路由。
 func (b *Biz) migrateAccountState(oldKey string, created []Account, in AccountInput) {
-	if removed, err := b.Store.DeleteByAccounts([]string{oldKey}); err == nil && len(removed) > 0 {
-		_ = b.recordRemoved(removed)
+	if err := b.Store.MigrateAccountModels(oldKey, created[0].Key, created[0].Type, created[0].Name); err != nil {
+		slog.Warn("迁移模型审批状态失败", "err", err)
 	}
 	_ = b.Store.RenameAccountSetting(oldKey, created[0].Key)
 	for _, a := range created[1:] {

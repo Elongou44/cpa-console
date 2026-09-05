@@ -485,6 +485,23 @@ func (b *Biz) ApplyReview(ctx context.Context, action string, refs []store.Model
 	return len(changed), nil
 }
 
+// beginSyncExcl 申请与同步互斥的变更窗口：账号创建 / 身份变更期间禁止同步运行，
+// 避免同步的「消失账号清理」把刚随迁到新身份的审批状态误删。返回 false 表示同步正在进行。
+func (b *Biz) beginSyncExcl() (bool, func()) {
+	b.mu.Lock()
+	if b.syncing {
+		b.mu.Unlock()
+		return false, nil
+	}
+	b.syncing = true
+	b.mu.Unlock()
+	return true, func() {
+		b.mu.Lock()
+		b.syncing = false
+		b.mu.Unlock()
+	}
+}
+
 // enforceAfterReview 审批变更后的后台收敛；与周期/手动同步共用 syncing 互斥，避免并发写 CPA。
 func (b *Biz) enforceAfterReview() {
 	b.mu.Lock()
