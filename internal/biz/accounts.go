@@ -246,25 +246,10 @@ func parseEntryModels(entry map[string]any) []modelEntry {
 
 func keyEntryModels(ctx context.Context, c *cpa.Client, def collectionDef, entry map[string]any) []modelEntry {
 	if entrySupportsModels(def) {
-		out := parseEntryModels(entry)
-		if def.Type != "codex" || def.Channel == "" {
-			return out
-		}
-		// codex：条目路由清单之外，model-definitions 静态目录中的模型同样参与发现（进入待审批）。
-		names, err := c.GetModelDefinitions(ctx, def.Channel)
-		if err != nil {
-			return out
-		}
-		seen := map[string]bool{}
-		for _, m := range out {
-			seen[m.name] = true
-		}
-		for _, n := range names {
-			if !seen[n] {
-				out = append(out, modelEntry{name: n})
-			}
-		}
-		return out
+		// 路由清单以条目 models 为准（获取模型点选 / 手动添加），发现即放行。
+		// 不并入 model-definitions 静态目录：目录里的模型上游未必真实提供，
+		// 会产生「不存在的待审批」，模型是否存在由「获取模型」直连上游确认。
+		return parseEntryModels(entry)
 	}
 	if def.Channel == "" {
 		return nil
