@@ -29,6 +29,7 @@ type Biz struct {
 	syncing     bool
 	lastSyncAt  time.Time
 	lastSyncErr string
+	lastConnAt  time.Time
 }
 
 // New 创建 Biz。
@@ -136,6 +137,41 @@ func (b *Biz) RunSyncLoop(ctx context.Context) {
 			sctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 			if _, err := b.Sync(sctx, true); err != nil {
 				slog.Warn("后台同步失败", "err", err)
+			}
+			cancel()
+		}
+	}
+}
+
+// RunConnLoop 周期执行连通性检测；未配置或自动检测关闭时跳过，结果持久化供列表展示。
+func (b *Biz) RunConnLoop(ctx context.Context) {
+	tick := time.NewTicker(15 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			st, err := b.Store.GetSettings()
+			if err != nil || st["base_url"] == "" || st["management_key"] == "" {
+				continue
+			}
+			if st["conn_auto"] == "false" {
+				continue
+			}
+			interval := 300
+			if v, err := strconv.Atoi(st["conn_interval_sec"]); err == nil && v >= 30 {
+				interval = v
+			}
+			b.mu.Lock()
+			last := b.lastConnAt
+			b.mu.Unlock()
+			if !last.IsZero() && time.Since(last) < time.Duration(interval)*time.Second {
+				continue
+			}
+			cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+			if _, err := b.CheckConnectivity(cctx, nil); err != nil {
+				slog.Warn("后台连通性检测失败", "err", err)
 			}
 			cancel()
 		}

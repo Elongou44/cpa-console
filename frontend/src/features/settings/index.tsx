@@ -32,6 +32,8 @@ export default function SettingsPage() {
   const [autoSync, setAutoSync] = useState(true)
   const [intervalSec, setIntervalSec] = useState(60)
   const [defaultUA, setDefaultUA] = useState('')
+  const [connAuto, setConnAuto] = useState(true)
+  const [connIntervalSec, setConnIntervalSec] = useState(300)
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
@@ -40,6 +42,8 @@ export default function SettingsPage() {
       setAutoSync(settingsQuery.data.autoSync)
       setIntervalSec(settingsQuery.data.intervalSec)
       setDefaultUA(settingsQuery.data.defaultUA ?? '')
+      setConnAuto(settingsQuery.data.connAuto ?? true)
+      setConnIntervalSec(settingsQuery.data.connIntervalSec ?? 300)
       setLoaded(true)
     }
   }, [settingsQuery.data, loaded])
@@ -52,6 +56,8 @@ export default function SettingsPage() {
         autoSync,
         intervalSec,
         defaultUA,
+        connAuto,
+        connIntervalSec,
       }),
     onSuccess: () => {
       toast.success(t('settings.saved'))
@@ -156,6 +162,23 @@ export default function SettingsPage() {
                 className="font-mono text-xs"
               />
               <p className="text-xs text-muted-foreground">{t('settings.defaultUAHint')}</p>
+            </div>
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div>
+                <Label>{t('settings.connAuto')}</Label>
+                <p className="mt-1 text-xs text-muted-foreground">{t('settings.connAutoHint')}</p>
+              </div>
+              <Switch checked={connAuto} onCheckedChange={setConnAuto} />
+            </div>
+            <div className="grid gap-1.5">
+              <Label>{t('settings.connInterval')}</Label>
+              <Input
+                type="number"
+                min={30}
+                value={connIntervalSec}
+                onChange={(e) => setConnIntervalSec(Math.max(30, Number(e.target.value) || 30))}
+                className="w-32 font-mono"
+              />
             </div>
           </CardContent>
           <CardFooter>

@@ -33,6 +33,7 @@ func main() {
 
 	// 后台周期同步：模型发现 + 审批强管控收敛。
 	go b.RunSyncLoop(context.Background())
+	go b.RunConnLoop(context.Background())
 
 	dist, err := fs.Sub(frontend.Dist, "dist")
 	if err != nil {

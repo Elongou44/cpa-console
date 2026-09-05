@@ -123,6 +123,8 @@ export interface Settings {
   autoSync: boolean
   intervalSec: number
   defaultUA: string
+  connAuto: boolean
+  connIntervalSec: number
 }
 
 export interface RuntimeStatus {

@@ -48,13 +48,15 @@ func (h *handler) status(c *gin.Context) {
 // ---------- 设置 ----------
 
 type settingsPayload struct {
-	BaseURL       string  `json:"baseUrl"`
-	HasKey        bool    `json:"hasKey"`
-	KeyMasked     string  `json:"keyMasked"`
-	AutoSync      bool    `json:"autoSync"`
-	IntervalSec   int     `json:"intervalSec"`
-	DefaultUA     string  `json:"defaultUA"`
-	ManagementKey *string `json:"managementKey,omitempty"` // 仅写入用
+	BaseURL         string  `json:"baseUrl"`
+	HasKey          bool    `json:"hasKey"`
+	KeyMasked       string  `json:"keyMasked"`
+	AutoSync        bool    `json:"autoSync"`
+	IntervalSec     int     `json:"intervalSec"`
+	DefaultUA       string  `json:"defaultUA"`
+	ConnAuto        bool    `json:"connAuto"`
+	ConnIntervalSec int     `json:"connIntervalSec"`
+	ManagementKey   *string `json:"managementKey,omitempty"` // 仅写入用
 }
 
 func (h *handler) settingsOut() (*settingsPayload, error) {
@@ -71,13 +73,19 @@ func (h *handler) settingsOut() (*settingsPayload, error) {
 	if ua == "" {
 		ua = biz.DefaultUpstreamUA
 	}
+	connInterval := 300
+	if v, err := strconv.Atoi(st["conn_interval_sec"]); err == nil && v >= 30 {
+		connInterval = v
+	}
 	return &settingsPayload{
-		BaseURL:     st["base_url"],
-		HasKey:      st["management_key"] != "",
-		KeyMasked:   maskKey(st["management_key"]),
-		AutoSync:    auto,
-		IntervalSec: interval,
-		DefaultUA:   ua,
+		BaseURL:         st["base_url"],
+		HasKey:          st["management_key"] != "",
+		KeyMasked:       maskKey(st["management_key"]),
+		AutoSync:        auto,
+		IntervalSec:     interval,
+		DefaultUA:       ua,
+		ConnAuto:        st["conn_auto"] != "false",
+		ConnIntervalSec: connInterval,
 	}, nil
 }
 
@@ -97,10 +105,12 @@ func (h *handler) putSettings(c *gin.Context) {
 		return
 	}
 	kv := map[string]string{
-		"base_url":     in.BaseURL,
-		"auto_sync":    boolStr(in.AutoSync),
-		"interval_sec": strconv.Itoa(maxInt(in.IntervalSec, 15)),
-		"default_ua":   strings.TrimSpace(in.DefaultUA),
+		"base_url":          in.BaseURL,
+		"auto_sync":         boolStr(in.AutoSync),
+		"interval_sec":      strconv.Itoa(maxInt(in.IntervalSec, 15)),
+		"default_ua":        strings.TrimSpace(in.DefaultUA),
+		"conn_auto":         boolStr(in.ConnAuto),
+		"conn_interval_sec": strconv.Itoa(maxInt(in.ConnIntervalSec, 30)),
 	}
 	if in.ManagementKey != nil { // 指针：未传表示不修改
 		kv["management_key"] = *in.ManagementKey

@@ -1227,6 +1227,9 @@ func (b *Biz) CheckConnectivity(ctx context.Context, keys []string) ([]Connectiv
 	}
 	wg.Wait()
 	checked := time.Now().Format(time.RFC3339)
+	b.mu.Lock()
+	b.lastConnAt = time.Now()
+	b.mu.Unlock()
 	for _, res := range results {
 		if res.Key == "" {
 			continue
