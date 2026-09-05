@@ -129,6 +129,7 @@ func (s *snapshot) addErr(format string, args ...any) {
 func (b *Biz) discover(ctx context.Context, c *cpa.Client, withModels bool, skip map[string]bool) (*snapshot, error) {
 	snap := &snapshot{keyItems: map[string][]map[string]any{}}
 	uas, _ := b.Store.AccountUserAgents()
+	displayNames, _ := b.Store.AccountDisplayNames()
 	for _, def := range keyCollections {
 		items, err := c.GetKeyItems(ctx, def.Collection)
 		if err != nil {
@@ -138,6 +139,9 @@ func (b *Biz) discover(ctx context.Context, c *cpa.Client, withModels bool, skip
 		snap.keyItems[def.Collection] = items
 		for _, entry := range items {
 			acct := keyAccountFrom(def, entry)
+			if dn := displayNames[acct.Key]; dn != "" {
+				acct.Name = dn
+			}
 			// skip 中的账号不拉取模型、不探测上游（已关闭自动同步的账号在周期同步中完全不动）。
 			if withModels && !skip[acct.Key] {
 				models := keyEntryModels(ctx, c, def, entry)
@@ -198,14 +202,6 @@ func (b *Biz) discover(ctx context.Context, c *cpa.Client, withModels bool, skip
 	}
 	if len(snap.Accounts) == 0 && len(snap.Errors) > 0 {
 		return nil, fmt.Errorf("%s", strings.Join(snap.Errors, "; "))
-	}
-	// 控制台显示名（仅存本地库）优先于 CPA 名称/主机名，覆盖 codex 等无 name 字段的类型。
-	if displayNames, err := b.Store.AccountDisplayNames(); err == nil && len(displayNames) > 0 {
-		for i := range snap.Accounts {
-			if dn := displayNames[snap.Accounts[i].Key]; dn != "" {
-				snap.Accounts[i].Name = dn
-			}
-		}
 	}
 	return snap, nil
 }

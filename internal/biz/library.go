@@ -34,9 +34,13 @@ func (b *Biz) Library(ctx context.Context) ([]LibraryRow, error) {
 		return nil, err
 	}
 	out := make([]LibraryRow, 0, len(snap.Models))
+	displayNames, _ := b.Store.AccountDisplayNames()
 	for _, def := range keyCollections {
 		for _, entry := range snap.keyItems[def.Collection] {
 			acct := keyAccountFrom(def, entry)
+			if dn := displayNames[acct.Key]; dn != "" {
+				acct.Name = dn
+			}
 			if def.Type == "openai-compatibility" {
 				arr, _ := entry["models"].([]any)
 				for _, it := range arr {

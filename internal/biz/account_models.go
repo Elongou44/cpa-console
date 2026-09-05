@@ -66,10 +66,14 @@ func (b *Biz) GetAccountModelsDetail(ctx context.Context, key string) (*AccountM
 	if err != nil {
 		return nil, err
 	}
+	displayNames, _ := b.Store.AccountDisplayNames()
 	for _, entry := range items {
 		acct := keyAccountFrom(def, entry)
 		if acct.Key != key {
 			continue
+		}
+		if dn := displayNames[acct.Key]; dn != "" {
+			acct.Name = dn
 		}
 		return accountModelsDetailFromEntry(ctx, c, def, entry, acct)
 	}
